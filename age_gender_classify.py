@@ -48,7 +48,6 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         return hidden_states, logits_age, logits_gender
 
 
-# Load model from Hugging Face Hub
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
 processor = Wav2Vec2Processor.from_pretrained(model_name)
@@ -60,14 +59,11 @@ def process_func(
     embeddings: bool = False,
 ) -> np.ndarray:
     r"""Predict age and gender or extract embeddings from raw audio signal."""
-
-    # Normalize signal using processor
     y = processor(x, sampling_rate=sampling_rate)
     y = y['input_values'][0]
     y = y.reshape(1, -1)
     y = torch.from_numpy(y).to(device)
 
-    # Run through the model
     with torch.no_grad():
         y = model(y)
         if embeddings:
@@ -75,7 +71,6 @@ def process_func(
         else:
             y = torch.hstack([y[1], y[2]])
 
-    # Convert to NumPy array
     y = y.detach().cpu().numpy()
     return y
 

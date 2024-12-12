@@ -50,7 +50,6 @@ model = AgeGenderModel.from_pretrained(model_name).to(device)
 
 pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token="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")
 
-# Load Whisper model
 whisper_model = load_model("base").to(device)
 
 
@@ -86,15 +85,6 @@ def transcribe_audio_segment(audio_path: str):
 
 
 def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: str = "speaker_segments"):
-    """
-    Splits the audio file based on speaker changes and stores the segments in a specified folder.
-
-    Parameters:
-        audio_path (str): Path to the input audio file.
-        speaker_changes (list): List of tuples with speaker changes (start, end, speaker).
-        output_dir (str): Directory to store the audio segments.
-    """
-    # Create the output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
     signal, sr = librosa.load(audio_path, sr=16000)
@@ -105,7 +95,6 @@ def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: s
         end_sample = int(end * sr)
         segment = signal[start_sample:end_sample]
 
-        # Save the segment in the output directory
         segment_filename = os.path.join(output_dir, f"speaker_{speaker}_segment_{idx}.wav")
         sf.write(segment_filename, segment, sr)
         audio_segments.append(segment_filename)
@@ -126,7 +115,6 @@ def process_audio(audio_path: str):
     for idx, (change, segment_path) in enumerate(zip(speaker_changes, audio_segments)):
         start_time, end_time, speaker = change
         
-        # Transcribe each audio segment individually
         segment_transcription = transcribe_audio_segment(segment_path)
         
         age = output[0][0]

@@ -87,6 +87,6 @@ sampling_rate = 16000
 signal = signal[:sampling_rate]  
 signal = signal.reshape(1, -1).astype(np.float32)  
 
-# Process the audio
+
 output = process_func(signal, sampling_rate)
 print(output)

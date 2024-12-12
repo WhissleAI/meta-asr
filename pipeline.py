@@ -120,7 +120,7 @@ def process_audio(audio_path: str):
     output = process_func(signal, sampling_rate)
 
     speaker_changes = get_speaker_changes(audio_path)
-    audio_segments = split_audio_by_speaker(audio_path, speaker_changes, output_dir="speaker_segments")
+    audio_segments = split_audio_by_speaker(audio_path, speaker_changes, output_dir="speaker_segments1")
 
     data = []
     for idx, (change, segment_path) in enumerate(zip(speaker_changes, audio_segments)):
@@ -143,8 +143,8 @@ def process_audio(audio_path: str):
         })
 
     df = pd.DataFrame(data)
-    df.to_csv("output.csv", index=False)
+    df.to_csv("output1.csv", index=False)
 
 
-audio_path = "test_audio/test.mp3"
+audio_path = "test_audio/test2.mp3"
 process_audio(audio_path)

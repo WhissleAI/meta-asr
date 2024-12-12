@@ -1,16 +1,14 @@
 import torch
-import torch.nn as nn  # Import nn here
+import torch.nn as nn
 import numpy as np
 import librosa
 import pandas as pd
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC, Wav2Vec2PreTrainedModel, Wav2Vec2Model
 from pyannote.audio import Pipeline
-from pyannote.core import Segment
 import soundfile as sf
-
+from whisper import load_model
+import os
 class ModelHead(nn.Module):
-   
-
     def __init__(self, config, num_labels):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
@@ -28,8 +26,6 @@ class ModelHead(nn.Module):
 
 
 class AgeGenderModel(Wav2Vec2PreTrainedModel):
-   
-
     def __init__(self, config):
         super().__init__(config)
         self.config = config
@@ -47,18 +43,15 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         return hidden_states, logits_age, logits_gender
 
 
-
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
 processor = Wav2Vec2Processor.from_pretrained(model_name)
 model = AgeGenderModel.from_pretrained(model_name).to(device)
 
-asr_model_name = "facebook/wav2vec2-large-960h-lv60-self"
-asr_processor = Wav2Vec2Processor.from_pretrained(asr_model_name)
-asr_model = Wav2Vec2ForCTC.from_pretrained(asr_model_name).to(device)
+pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token="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")
 
-pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token="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" )
+# Load Whisper model
+whisper_model = load_model("base").to(device)
 
 
 def process_func(x: np.ndarray, sampling_rate: int, embeddings: bool = False) -> np.ndarray:
@@ -70,18 +63,16 @@ def process_func(x: np.ndarray, sampling_rate: int, embeddings: bool = False) ->
     with torch.no_grad():
         y = model(y)
         if embeddings:
-            y = y[0].detach().cpu().numpy()  # Embeddings
+            y = y[0].detach().cpu().numpy()
         else:
-            age_logits = y[1].detach().cpu().numpy()  # Age logits
-            gender_logits = y[2].detach().cpu().numpy()  # Gender logits
-            y = [age_logits, gender_logits]  # Ensure output is a list
+            age_logits = y[1].detach().cpu().numpy()
+            gender_logits = y[2].detach().cpu().numpy()
+            y = [age_logits, gender_logits]
 
     return y
 
 
-
 def get_speaker_changes(audio_path: str):
-  
     diarization = pipeline({'audio': audio_path})
     speaker_changes = []
     for turn, _, speaker in diarization.itertracks(yield_label=True):
@@ -89,20 +80,23 @@ def get_speaker_changes(audio_path: str):
     return speaker_changes
 
 
-def transcribe_audio(audio_path: str):
+def transcribe_audio_segment(audio_path: str):
+    result = whisper_model.transcribe(audio_path)
+    return result["text"]
 
-    signal, sr = librosa.load(audio_path, sr=16000)
-    inputs = asr_processor(signal, return_tensors="pt", padding=True, sampling_rate=sr)
+
+def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: str = "speaker_segments"):
+    """
+    Splits the audio file based on speaker changes and stores the segments in a specified folder.
+
+    Parameters:
+        audio_path (str): Path to the input audio file.
+        speaker_changes (list): List of tuples with speaker changes (start, end, speaker).
+        output_dir (str): Directory to store the audio segments.
+    """
+    # Create the output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
     
-    with torch.no_grad():
-        logits = asr_model(input_values=inputs.input_values.to(device)).logits
-    
-    predicted_ids = torch.argmax(logits, dim=-1)
-    transcription = asr_processor.decode(predicted_ids[0])
-    return transcription
-
-
-def split_audio_by_speaker(audio_path: str, speaker_changes: list):
     signal, sr = librosa.load(audio_path, sr=16000)
     audio_segments = []
 
@@ -111,11 +105,9 @@ def split_audio_by_speaker(audio_path: str, speaker_changes: list):
         end_sample = int(end * sr)
         segment = signal[start_sample:end_sample]
 
-       
-        segment_filename = f"speaker_{speaker}_segment_{idx}.wav"
+        # Save the segment in the output directory
+        segment_filename = os.path.join(output_dir, f"speaker_{speaker}_segment_{idx}.wav")
         sf.write(segment_filename, segment, sr)
-
-      
         audio_segments.append(segment_filename)
 
     return audio_segments
@@ -128,14 +120,17 @@ def process_audio(audio_path: str):
     output = process_func(signal, sampling_rate)
 
     speaker_changes = get_speaker_changes(audio_path)
-    audio_segments = split_audio_by_speaker(audio_path, speaker_changes)
-    transcription = transcribe_audio(audio_path)
+    audio_segments = split_audio_by_speaker(audio_path, speaker_changes, output_dir="speaker_segments")
 
     data = []
     for idx, (change, segment_path) in enumerate(zip(speaker_changes, audio_segments)):
         start_time, end_time, speaker = change
-        age = output[0][0]  # First value of age logits
-        gender = np.argmax(output[1])  # Index of max gender logit
+        
+        # Transcribe each audio segment individually
+        segment_transcription = transcribe_audio_segment(segment_path)
+        
+        age = output[0][0]
+        gender = np.argmax(output[1])
 
         data.append({
             'Start Time': start_time,
@@ -143,7 +138,7 @@ def process_audio(audio_path: str):
             'Speaker': speaker,
             'Age': age,
             'Gender': gender,
-            'Transcription': transcription,
+            'Transcription': segment_transcription,
             'Audio File Path': segment_path
         })
 
@@ -151,5 +146,5 @@ def process_audio(audio_path: str):
     df.to_csv("output.csv", index=False)
 
 
-audio_path = "test_audio/test2.mp3" 
+audio_path = "test_audio/test.mp3"
 process_audio(audio_path)

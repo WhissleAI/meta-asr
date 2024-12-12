@@ -80,7 +80,7 @@ def process_func(
     return y
 
 
-audio_path = "test_audio/test.mp3" 
+audio_path = "speaker_segments/speaker_SPEAKER_00_segment_4.wav" 
 signal, sr = librosa.load(audio_path, sr=16000)
 sampling_rate = 16000
 

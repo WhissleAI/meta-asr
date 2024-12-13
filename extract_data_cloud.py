@@ -11,10 +11,8 @@ bucket = client.get_bucket(bucket_name)
 download_path = "./batch_processing"
 os.makedirs(download_path, exist_ok=True)
 
-# Initialize processed count
 processed_count = 0
 
-# List all blobs in the bucket
 blobs = list(bucket.list_blobs())
 
 # Process only the first video

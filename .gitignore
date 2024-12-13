@@ -1,3 +1,5 @@
 .venv
 .env
 test.py
+batch_processing
+output/youtube_segment

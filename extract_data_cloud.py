@@ -1,49 +1,37 @@
 from google.cloud import storage
-import cv2
-import numpy as np
+import os
 
-def process_single_video_from_bucket(bucket_name, video_name):
-    storage_client = storage.Client.create_anonymous_client()
-    
-    bucket = storage_client.bucket(bucket_name)
-    
+# Initialize Google Cloud Storage client
+client = storage.Client()
 
-    blob = bucket.blob(video_name)
-    
-    print(f"Accessing {video_name} from bucket '{bucket_name}'...")
-    
-    video_data = blob.download_as_bytes()
-    
-
-    video_array = np.frombuffer(video_data, np.uint8)
-    
-    temp_video_file = "temp_video.mp4"
-    with open(temp_video_file, "wb") as f:
-        f.write(video_data)
-    
- 
-    cap = cv2.VideoCapture(temp_video_file)
-
-    if not cap.isOpened():
-        print(f"Failed to open {video_name}")
-        return
-    
-    print("Displaying video...")
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-    
-        cv2.imshow("Frame", frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    
-    cap.release()
-    cv2.destroyAllWindows()
-
-
+# Specify the bucket name
 bucket_name = "stream2action-audio"
-video_name = "youtube-videos/sample_video.mp4"  
+bucket = client.get_bucket(bucket_name)
 
+# Set download directory
+download_path = "./batch_processing"
+os.makedirs(download_path, exist_ok=True)
 
-process_single_video_from_bucket(bucket_name, video_name)
+# Initialize processed count
+processed_count = 0
+
+# List all blobs in the bucket
+blobs = list(bucket.list_blobs())
+
+# Process only the first video
+for blob in blobs:
+    if blob.name.endswith(('.mp4', '.avi', '.mov')):
+        # Construct the local file path
+        local_file_path = os.path.join(download_path, blob.name)
+        os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+
+        print(f"Downloading {blob.name}...")
+        blob.download_to_filename(local_file_path)
+
+        print(f"Processing {local_file_path}...")
+        # Add your video processing logic here if needed
+
+        processed_count += 1
+        break  # Exit the loop after processing the first video
+
+print(f"Total videos processed: {processed_count}")

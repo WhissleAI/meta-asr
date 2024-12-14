@@ -8,6 +8,8 @@ from pyannote.audio import Pipeline
 import soundfile as sf
 from whisper import load_model
 import os
+from dotenv import load_getenv
+load_getenv()
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
         super().__init__()
@@ -48,7 +50,7 @@ model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
 processor = Wav2Vec2Processor.from_pretrained(model_name)
 model = AgeGenderModel.from_pretrained(model_name).to(device)
 
-pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token="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")
+pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token=os.getenv("HF_TOKEN"))
 
 whisper_model = load_model("base").to(device)
 

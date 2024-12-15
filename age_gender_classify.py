@@ -10,7 +10,6 @@ from transformers.models.wav2vec2.modeling_wav2vec2 import (
 
 
 class ModelHead(nn.Module):
-    r"""Classification head."""
 
     def __init__(self, config, num_labels):
         super().__init__()
@@ -29,7 +28,6 @@ class ModelHead(nn.Module):
 
 
 class AgeGenderModel(Wav2Vec2PreTrainedModel):
-    r"""Speech age and gender classifier."""
 
     def __init__(self, config):
         super().__init__(config)
@@ -58,7 +56,6 @@ def process_func(
     sampling_rate: int,
     embeddings: bool = False,
 ) -> np.ndarray:
-    r"""Predict age and gender or extract embeddings from raw audio signal."""
     y = processor(x, sampling_rate=sampling_rate)
     y = y['input_values'][0]
     y = y.reshape(1, -1)

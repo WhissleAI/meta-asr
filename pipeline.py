@@ -110,74 +110,53 @@ def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: s
 
 
 def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
-    """
-    Process large audio files in smaller chunks to manage GPU memory
-    
-    Args:
-    - audio_path: Path to the audio file
-    - chunk_duration: Duration of each chunk in seconds (default 20 seconds)
-    
-    Returns:
-    - Pandas DataFrame with processed audio segments
-    """
-    # Load the entire audio file
+
     signal, sr = librosa.load(audio_path, sr=16000)
     total_duration = len(signal) / sr
-    
-    # Prepare output directory
+ 
     output_dir = "./output/youtube_segment"
     speaker_segments_dir = "./output/speaker_segments3"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(speaker_segments_dir, exist_ok=True)
-    
-    # Initialize results list
+
     all_data = []
-    
-    # Process audio in chunks
     chunk_size = int(chunk_duration * sr)
-    global_segment_counter = 0  # Global counter to ensure unique filenames
+    global_segment_counter = 0 
     
     for chunk_idx in range(0, len(signal), chunk_size):
-        # Clear CUDA cache between chunks
+        
         torch.cuda.empty_cache()
         
         # Extract chunk
         end = min(chunk_idx + chunk_size, len(signal))
         chunk = signal[chunk_idx:end]
         
-        # Skip very short chunks
         if len(chunk) / sr < 1.0:
             continue
         
-        # Temporary chunk file (use existing if already created)
         chunk_filename = f"chunk_{chunk_idx//chunk_size}.wav"
         chunk_path = os.path.join(output_dir, chunk_filename)
-        
-        # Only write chunk if file doesn't exist
+  
         if not os.path.exists(chunk_path):
             sf.write(chunk_path, chunk, sr)
         
         try:
-            # Perform diarization on chunk
+          
             diarization = pipeline({'audio': chunk_path})
             speaker_changes = []
             for turn, _, speaker in diarization.itertracks(yield_label=True):
                 speaker_changes.append((turn.start, turn.end, speaker))
             
-            # Split the audio by speakers
             for speaker_idx, (start_time, end_time, speaker) in enumerate(speaker_changes):
-                # Calculate sample indices relative to the chunk
+
                 start_sample = int(start_time * sr)
                 end_sample = int(end_time * sr)
-                
-                # Extract speaker segment
+    
                 speaker_segment = chunk[start_sample:end_sample]
                 
-                # Skip very short segments
                 if len(speaker_segment) / sr < 1.0:
                     continue
-                
-                # Create unique segment filename
+
                 global_segment_counter += 1
                 segment_filename = f"speaker_{speaker}_{global_segment_counter:04d}_segment.wav"
                 segment_path = os.path.join(speaker_segments_dir, segment_filename)
@@ -188,17 +167,14 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
                 y = y['input_values'][0]
                 y = y.reshape(1, -1)
                 y = torch.from_numpy(y).to(device)
-                
-                # Get model predictions
+  
                 with torch.no_grad():
                     model_output = model(y)
                     age = float(model_output[1].detach().cpu().numpy()[0][0])
                     gender = np.argmax(model_output[2].detach().cpu().numpy())
-                
-                # Transcribe segment
+          
                 transcription = whisper_model.transcribe(segment_path)["text"]
-                
-                # Store results
+     
                 all_data.append({
                     'Start Time': start_time,
                     'End Time': end_time,
@@ -212,15 +188,12 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
         except Exception as e:
             print(f"Error processing chunk {chunk_filename}: {e}")
         
-        # Optional: free up memory
         del chunk
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     
-    # Create DataFrame
     df = pd.DataFrame(all_data)
-    
-    # Save results
+   
     output_csv = "output_large_audio.csv"
     df.to_csv(output_csv, index=False)
     print(f"Processed audio saved to {output_csv}")

@@ -120,49 +120,43 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
     Returns:
     - Pandas DataFrame with processed audio segments
     """
-    # Load the entire audio file
+
     signal, sr = librosa.load(audio_path, sr=16000)
     total_duration = len(signal) / sr
     
-    # Prepare output directory
     output_dir = "./output/youtube_segment"
     speaker_segments_dir = "./output/speaker_segments"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(speaker_segments_dir, exist_ok=True)
-    
-    # Initialize results list
+
     all_data = []
     
     # Process audio in chunks
     chunk_size = int(chunk_duration * sr)
     for start in range(0, len(signal), chunk_size):
-        # Clear CUDA cache between chunks
+    
         torch.cuda.empty_cache()
         
-        # Extract chunk
         end = min(start + chunk_size, len(signal))
         chunk = signal[start:end]
-        
-        # Skip very short chunks
+ 
         if len(chunk) / sr < 1.0:
             continue
         
-        # Temporary chunk file (use existing if already created)
         chunk_filename = f"chunk_{start//chunk_size}.wav"
         chunk_path = os.path.join(output_dir, chunk_filename)
-        
-        # Only write chunk if file doesn't exist
+
         if not os.path.exists(chunk_path):
             sf.write(chunk_path, chunk, sr)
         
         try:
-            # Perform diarization on chunk
+         
             diarization = pipeline({'audio': chunk_path})
             speaker_changes = []
             for turn, _, speaker in diarization.itertracks(yield_label=True):
                 speaker_changes.append((turn.start, turn.end, speaker))
             
-            # Split the audio by speakers
+         
             for speaker_idx, (start_time, end_time, speaker) in enumerate(speaker_changes):
                 # Calculate sample indices relative to the chunk
                 start_sample = int(start_time * sr)
@@ -175,7 +169,7 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
                 if len(speaker_segment) / sr < 1.0:
                     continue
                 
-                # Create segment filename with more descriptive naming
+           
                 segment_filename = f"speaker_{speaker}_{speaker_idx:02d}_segment.wav"
                 segment_path = os.path.join(speaker_segments_dir, segment_filename)
                 

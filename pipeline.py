@@ -8,7 +8,8 @@ from pyannote.audio import Pipeline
 import soundfile as sf
 from whisper import load_model
 import os
-
+from dotenv import load_dotenv
+load_dotenv()
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
         super().__init__()
@@ -49,7 +50,7 @@ model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
 processor = Wav2Vec2Processor.from_pretrained(model_name)
 model = AgeGenderModel.from_pretrained(model_name).to(device)
 
-pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token="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")
+pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token=os.getenv("HF_TOKEN"))
 
 whisper_model = load_model("base").to(device)
 
@@ -85,7 +86,7 @@ def transcribe_audio_segment(audio_path: str):
     return result["text"]
 
 
-def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: str = "speaker_segments", max_duration: float = 20.0):
+def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: str = "speaker_segments3", max_duration: float = 20.0):
     os.makedirs(output_dir, exist_ok=True)
 
     signal, sr = librosa.load(audio_path, sr=16000)
@@ -95,7 +96,6 @@ def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: s
         start_sample = int(start * sr)
         end_sample = int(end * sr)
 
-        # Check if segment duration exceeds max_duration
         while start_sample < end_sample:
             segment_end_sample = min(start_sample + int(max_duration * sr), end_sample)
             segment = signal[start_sample:segment_end_sample]
@@ -120,43 +120,51 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
     Returns:
     - Pandas DataFrame with processed audio segments
     """
-
+    # Load the entire audio file
     signal, sr = librosa.load(audio_path, sr=16000)
     total_duration = len(signal) / sr
     
+    # Prepare output directory
     output_dir = "./output/youtube_segment"
-    speaker_segments_dir = "./output/speaker_segments"
+    speaker_segments_dir = "./output/speaker_segments3"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(speaker_segments_dir, exist_ok=True)
-
+    
+    # Initialize results list
     all_data = []
     
     # Process audio in chunks
     chunk_size = int(chunk_duration * sr)
-    for start in range(0, len(signal), chunk_size):
+    global_segment_counter = 0  # Global counter to ensure unique filenames
     
+    for chunk_idx in range(0, len(signal), chunk_size):
+        # Clear CUDA cache between chunks
         torch.cuda.empty_cache()
         
-        end = min(start + chunk_size, len(signal))
-        chunk = signal[start:end]
- 
+        # Extract chunk
+        end = min(chunk_idx + chunk_size, len(signal))
+        chunk = signal[chunk_idx:end]
+        
+        # Skip very short chunks
         if len(chunk) / sr < 1.0:
             continue
         
-        chunk_filename = f"chunk_{start//chunk_size}.wav"
+        # Temporary chunk file (use existing if already created)
+        chunk_filename = f"chunk_{chunk_idx//chunk_size}.wav"
         chunk_path = os.path.join(output_dir, chunk_filename)
-
+        
+        # Only write chunk if file doesn't exist
         if not os.path.exists(chunk_path):
             sf.write(chunk_path, chunk, sr)
         
         try:
-         
+            # Perform diarization on chunk
             diarization = pipeline({'audio': chunk_path})
             speaker_changes = []
             for turn, _, speaker in diarization.itertracks(yield_label=True):
                 speaker_changes.append((turn.start, turn.end, speaker))
             
-         
+            # Split the audio by speakers
             for speaker_idx, (start_time, end_time, speaker) in enumerate(speaker_changes):
                 # Calculate sample indices relative to the chunk
                 start_sample = int(start_time * sr)
@@ -169,14 +177,13 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
                 if len(speaker_segment) / sr < 1.0:
                     continue
                 
-           
-                segment_filename = f"speaker_{speaker}_{speaker_idx:02d}_segment.wav"
+                # Create unique segment filename
+                global_segment_counter += 1
+                segment_filename = f"speaker_{speaker}_{global_segment_counter:04d}_segment.wav"
                 segment_path = os.path.join(speaker_segments_dir, segment_filename)
-                
-                # Save speaker segment
+              
                 sf.write(segment_path, speaker_segment, sr)
-                
-                # Prepare input for model
+               
                 y = processor(speaker_segment, sampling_rate=sr)
                 y = y['input_values'][0]
                 y = y.reshape(1, -1)
@@ -185,7 +192,7 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
                 # Get model predictions
                 with torch.no_grad():
                     model_output = model(y)
-                    age = model_output[1].detach().cpu().numpy()[0]
+                    age = float(model_output[1].detach().cpu().numpy()[0][0])
                     gender = np.argmax(model_output[2].detach().cpu().numpy())
                 
                 # Transcribe segment
@@ -220,6 +227,6 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
     
     return df
 
-# Usage
-audio_path = "temp_audio.wav"
+
+audio_path = "batch_processing/real_world/11_Steps_To_Impress_In_Any_Panel_Discussion_Media_Training.mp3"
 process_large_audio(audio_path)

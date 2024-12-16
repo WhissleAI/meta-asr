@@ -1,14 +1,16 @@
-import torch
-import torch.nn as nn
-import numpy as np
-import librosa
-import pandas as pd
-from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC, Wav2Vec2PreTrainedModel, Wav2Vec2Model
-from pyannote.audio import Pipeline
-import soundfile as sf
-from whisper import load_model
 import os
+import torch
+import librosa
+import numpy as np
+import pandas as pd
+import moviepy as mp
+import torch.nn as nn
+import soundfile as sf
 from dotenv import load_dotenv
+from whisper import load_model
+from pyannote.audio import Pipeline
+from convert_mp4_mp3 import MP4AudioChunkConverter
+from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC, Wav2Vec2PreTrainedModel, Wav2Vec2Model
 load_dotenv()
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
@@ -86,7 +88,7 @@ def transcribe_audio_segment(audio_path: str):
     return result["text"]
 
 
-def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: str = "speaker_segments3", max_duration: float = 20.0):
+def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: str = "temp", max_duration: float = 20.0):
     os.makedirs(output_dir, exist_ok=True)
 
     signal, sr = librosa.load(audio_path, sr=16000)
@@ -107,15 +109,39 @@ def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: s
             start_sample = segment_end_sample
 
     return audio_segments
+def convert_mp4_to_wav(mp4_path: str) -> str:
 
+    file_ext = os.path.splitext(mp4_path)[1].lower()
+    
+    if file_ext == '.mp4':
+     
+        output_dir = "./converted_audio"
+        os.makedirs(output_dir, exist_ok=True)
+        
+     
+        wav_path = os.path.join(output_dir, os.path.splitext(os.path.basename(mp4_path))[0] + ".wav")
+        
+        video = mp.VideoFileClip(mp4_path)
+        video.audio.write_audiofile(wav_path)
+        video.close()
+        
+        return wav_path
+    
+    return mp4_path
 
 def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
 
-    signal, sr = librosa.load(audio_path, sr=16000)
+    # Convert MP4 to WAV if needed
+    processed_audio_path = convert_mp4_to_wav(audio_path)
+    
+    # Rest of the existing process_large_audio function remains the same
+    # Just replace audio_path with processed_audio_path
+    
+    signal, sr = librosa.load(processed_audio_path, sr=16000)
     total_duration = len(signal) / sr
  
-    output_dir = "./output/youtube_segment"
-    speaker_segments_dir = "./output/speaker_segments3"
+    output_dir = "./output/temp"
+    speaker_segments_dir = "temp"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(speaker_segments_dir, exist_ok=True)
 
@@ -127,7 +153,7 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
         
         torch.cuda.empty_cache()
         
-        # Extract chunk
+      
         end = min(chunk_idx + chunk_size, len(signal))
         chunk = signal[chunk_idx:end]
         
@@ -141,7 +167,6 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
             sf.write(chunk_path, chunk, sr)
         
         try:
-          
             diarization = pipeline({'audio': chunk_path})
             speaker_changes = []
             for turn, _, speaker in diarization.itertracks(yield_label=True):
@@ -200,6 +225,6 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
     
     return df
 
-
-audio_path = "batch_processing/real_world/11_Steps_To_Impress_In_Any_Panel_Discussion_Media_Training.mp3"
-process_large_audio(audio_path)
+if __name__ == "__main__":
+    audio_path = "A one minute TEDx Talk for the digital age _ Woody Roseland _ TEDxMileHigh.mp4"
+    process_large_audio(audio_path)

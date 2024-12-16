@@ -4,3 +4,6 @@ test.py
 batch_processing
 output/youtube_segment
 output/speaker_segments3
+__pycache__
+temporary_folder
+converted_audio

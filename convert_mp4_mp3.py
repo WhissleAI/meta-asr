@@ -1,6 +1,6 @@
 import os
 from typing import Generator, Optional
-from moviepy.editor import VideoFileClip
+from moviepy import VideoFileClip
 from pydub import AudioSegment
 from io import BytesIO
 

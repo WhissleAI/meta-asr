@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from whisper import load_model
 from pyannote.audio import Pipeline
 from convert_mp4_mp3 import MP4AudioChunkConverter
+from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC, Wav2Vec2PreTrainedModel, Wav2Vec2Model
 load_dotenv()
 class ModelHead(nn.Module):
@@ -88,7 +89,7 @@ def transcribe_audio_segment(audio_path: str):
     return result["text"]
 
 
-def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: str = "temp", max_duration: float = 20.0):
+def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: str = "spk_dir", max_duration: float = 20.0):
     os.makedirs(output_dir, exist_ok=True)
 
     signal, sr = librosa.load(audio_path, sr=16000)
@@ -109,6 +110,47 @@ def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: s
             start_sample = segment_end_sample
 
     return audio_segments
+def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000) -> str:
+    try:
+        # Consider caching model and feature extractor
+        model_name = "superb/hubert-large-superb-er"
+        
+        # Lazy loading of models
+        if not hasattr(extract_emotion, 'model'):
+            extract_emotion.model = AutoModelForAudioClassification.from_pretrained(model_name)
+            extract_emotion.feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
+        
+        # More comprehensive input validation
+        if audio_data is None or len(audio_data) == 0:
+            return "No Audio"
+        
+        if len(audio_data) < sampling_rate:
+            return "Audio Too Short"
+
+        inputs = extract_emotion.feature_extractor(
+            audio_data, 
+            sampling_rate=sampling_rate, 
+            return_tensors="pt", 
+            padding=True
+        )
+
+        outputs = extract_emotion.model(**inputs)
+        predicted_class_idx = outputs.logits.argmax(-1).item()
+        
+        return extract_emotion.model.config.id2label.get(predicted_class_idx, "Unknown")
+
+    except RuntimeError as cuda_err:
+        print(f"CUDA Error: {cuda_err}. Try reducing batch size or model complexity.")
+        return "Processing Error"
+    except Exception as e:
+        print(f"Unexpected error in emotion extraction: {e}")
+        return "Error"
+
+    except Exception as e:
+        print(f"Error in emotion extraction: {e}")
+        return "Error"
+
+
 def convert_mp4_to_wav(mp4_path: str) -> str:
 
     file_ext = os.path.splitext(mp4_path)[1].lower()
@@ -138,8 +180,8 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
     signal, sr = librosa.load(processed_audio_path, sr=16000)
     total_duration = len(signal) / sr
  
-    output_dir = "./output/temp"
-    speaker_segments_dir = "temp"
+    output_dir = "temp"
+    speaker_segments_dir = "spk_dir"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(speaker_segments_dir, exist_ok=True)
 
@@ -177,7 +219,7 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
     
                 speaker_segment = chunk[start_sample:end_sample]
                 
-                if len(speaker_segment) / sr < 1.0:
+                if len(speaker_segment) / sr < 1.5:
                     continue
 
                 global_segment_counter += 1
@@ -197,7 +239,9 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
                     gender = np.argmax(model_output[2].detach().cpu().numpy())
           
                 transcription = whisper_model.transcribe(segment_path)["text"]
-     
+                speaker_segment_audio, _ = librosa.load(segment_path, sr=16000)
+    
+                emotion = extract_emotion(speaker_segment_audio)
                 all_data.append({
                     'Start Time': start_time,
                     'End Time': end_time,
@@ -205,6 +249,7 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
                     'Age': float(age),
                     'Gender': int(gender),
                     'Transcription': transcription,
+                    'emotion' :emotion,
                     'Audio File Path': segment_path
                 })
         
@@ -217,11 +262,11 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
     
     df = pd.DataFrame(all_data)
    
-    output_csv = "output_large_audio.csv"
+    output_csv = "temp_out.csv"
     df.to_csv(output_csv, index=False)
     print(f"Processed audio saved to {output_csv}")
     return df
 
 if __name__ == "__main__":
-    audio_path = "A one minute TEDx Talk for the digital age _ Woody Roseland _ TEDxMileHigh.mp4"
+    audio_path = "temporary_folder/A one minute TEDx Talk for the digital age _ Woody Roseland _ TEDxMileHigh.mp4"
     process_large_audio(audio_path)

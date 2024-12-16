@@ -1,29 +1,49 @@
-from moviepy import VideoFileClip
+import os
+from typing import Generator, Optional
+from moviepy.editor import VideoFileClip
 from pydub import AudioSegment
-from pydub.playback import play
 from io import BytesIO
 
-def mp4_to_mp3_chunks(file_path, chunk_duration=5000):
-    video = VideoFileClip(file_path)
-    audio_path = "temp_audio.wav"
+class MP4AudioChunkConverter:
 
-   
-    audio = video.audio
-    audio.write_audiofile(audio_path, codec="pcm_s16le")
+    def __init__(self, file_path: str, chunk_duration: int = 5000, temp_audio_path: Optional[str] = None):
+    
+        self.file_path = file_path
+        self.chunk_duration = chunk_duration
+        self.temp_audio_path = temp_audio_path or "temp_audio.wav"
+    
+    def convert_to_chunks(self) -> Generator[BytesIO, None, None]:
 
-  
-    audio_segment = AudioSegment.from_file(audio_path, format="wav")
+        if not os.path.exists(self.file_path):
+            raise FileNotFoundError(f"Input file not found: {self.file_path}")
+        
+        try:
+            video = VideoFileClip(self.file_path)
+            audio = video.audio
+            
+            audio.write_audiofile(self.temp_audio_path, codec="pcm_s16le")
+            
 
-    for i in range(0, len(audio_segment), chunk_duration):
-        chunk = audio_segment[i:i + chunk_duration]
-        chunk_buffer = BytesIO()
-        chunk.export(chunk_buffer, format="mp3")
-        chunk_buffer.seek(0)
-        yield chunk_buffer
+            audio_segment = AudioSegment.from_file(self.temp_audio_path, format="wav")
+            
+            
+            for i in range(0, len(audio_segment), self.chunk_duration):
+                chunk = audio_segment[i:i + self.chunk_duration]
+                chunk_buffer = BytesIO()
+                chunk.export(chunk_buffer, format="mp3")
+                chunk_buffer.seek(0)
+                yield chunk_buffer
+        
+        except Exception as e:
+            raise Exception(f"Error converting audio: {e}")
+        
+        finally:
 
-if __name__ == "__main__":
-    video_path = "batch_processing/real_world/11_Steps_To_Impress_In_Any_Panel_Discussion_Media_Training.mp4" 
-    for idx, audio_chunk in enumerate(mp4_to_mp3_chunks(video_path)):
-        print(f"Playing chunk {idx + 1}")
-        chunk_audio = AudioSegment.from_file(audio_chunk, format="mp3")
-        play(chunk_audio)
+            if os.path.exists(self.temp_audio_path):
+                os.remove(self.temp_audio_path)
+          
+            if 'video' in locals():
+                video.close()
+    
+    def __repr__(self) -> str:
+        return f"MP4AudioChunkConverter(file_path='{self.file_path}', chunk_duration={self.chunk_duration})"

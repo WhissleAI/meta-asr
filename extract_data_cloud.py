@@ -1,31 +1,23 @@
 from google.cloud import storage
-import os
 
+def list_public_bucket_objects(bucket_name, prefix=None):
+    """Lists objects in a public Google Cloud Storage bucket."""
+    # Create a client without credentials for public buckets
+    storage_client = storage.Client.create_anonymous_client()
+    
+    # Get the bucket
+    bucket = storage_client.bucket(bucket_name)
+    
+    # List objects with an optional prefix
+    blobs = bucket.list_blobs(prefix=prefix)
+    
+    print(f"Objects in bucket '{bucket_name}':")
+    for blob in blobs:
+        print(blob.name)
 
-client = storage.Client()
-
-
+# Define the bucket name and optional prefix
 bucket_name = "stream2action-audio"
-bucket = client.get_bucket(bucket_name)
+prefix = "youtube-videos"
 
-download_path = "./batch_processing"
-os.makedirs(download_path, exist_ok=True)
-
-processed_count = 0
-
-blobs = list(bucket.list_blobs())
-
-for blob in blobs:
-    if blob.name.endswith(('.mp4', '.avi', '.mov')):
-      
-        local_file_path = os.path.join(download_path, blob.name)
-        os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-
-        print(f"Downloading {blob.name}...")
-        blob.download_to_filename(local_file_path)
-
-
-        processed_count += 1
-        break  
-
-print(f"Total videos processed: {processed_count}")
+# Call the function
+list_public_bucket_objects(bucket_name, prefix)

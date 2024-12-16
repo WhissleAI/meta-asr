@@ -131,11 +131,9 @@ def convert_mp4_to_wav(mp4_path: str) -> str:
 
 def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
 
-    # Convert MP4 to WAV if needed
+   
     processed_audio_path = convert_mp4_to_wav(audio_path)
-    
-    # Rest of the existing process_large_audio function remains the same
-    # Just replace audio_path with processed_audio_path
+
     
     signal, sr = librosa.load(processed_audio_path, sr=16000)
     total_duration = len(signal) / sr
@@ -222,7 +220,6 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
     output_csv = "output_large_audio.csv"
     df.to_csv(output_csv, index=False)
     print(f"Processed audio saved to {output_csv}")
-    
     return df
 
 if __name__ == "__main__":

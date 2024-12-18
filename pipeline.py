@@ -157,48 +157,51 @@ def convert_mp4_to_wav(mp4_path: str) -> str:
     return mp4_path
 
 def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
-
-   
+    # Convert MP4 to WAV if needed
     processed_audio_path = convert_mp4_to_wav(audio_path)
-
     
+    # Load audio signal
     signal, sr = librosa.load(processed_audio_path, sr=16000)
     total_duration = len(signal) / sr
  
-    output_dir = "temp"
-    speaker_segments_dir = "spk_dir"
+    # Create output directory
+    output_dir = "chunks"
     os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(speaker_segments_dir, exist_ok=True)
 
     all_data = []
     chunk_size = int(chunk_duration * sr)
-    global_segment_counter = 0 
+    
+    # Generate base filename from the input audio path
+    base_filename = os.path.splitext(os.path.basename(audio_path))[0]
     
     for chunk_idx in range(0, len(signal), chunk_size):
-        
+        # Clear CUDA cache
         torch.cuda.empty_cache()
         
-      
+        # Extract chunk
         end = min(chunk_idx + chunk_size, len(signal))
         chunk = signal[chunk_idx:end]
         
+        # Skip very short chunks
         if len(chunk) / sr < 1.0:
             continue
         
-        chunk_filename = f"chunk_{chunk_idx//chunk_size}.wav"
+        # Create chunk filename using base filename and chunk index
+        chunk_filename = f"{base_filename}_chunk_{chunk_idx//chunk_size}.wav"
         chunk_path = os.path.join(output_dir, chunk_filename)
   
+        # Save chunk if it doesn't exist
         if not os.path.exists(chunk_path):
             sf.write(chunk_path, chunk, sr)
         
         try:
+            # Rest of the processing remains the same as in the original function
             diarization = pipeline({'audio': chunk_path})
             speaker_changes = []
             for turn, _, speaker in diarization.itertracks(yield_label=True):
                 speaker_changes.append((turn.start, turn.end, speaker))
             
             for speaker_idx, (start_time, end_time, speaker) in enumerate(speaker_changes):
-
                 start_sample = int(start_time * sr)
                 end_sample = int(end_time * sr)
     
@@ -207,12 +210,7 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
                 if len(speaker_segment) / sr < 1.5:
                     continue
 
-                global_segment_counter += 1
-                segment_filename = f"speaker_{speaker}_{global_segment_counter:04d}_segment.wav"
-                segment_path = os.path.join(speaker_segments_dir, segment_filename)
-              
-                sf.write(segment_path, speaker_segment, sr)
-               
+                # Process the speaker segment
                 y = processor(speaker_segment, sampling_rate=sr)
                 y = y['input_values'][0]
                 y = y.reshape(1, -1)
@@ -223,8 +221,12 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
                     age = float(model_output[1].detach().cpu().numpy()[0][0])
                     gender = np.argmax(model_output[2].detach().cpu().numpy())
           
-                transcription = whisper_model.transcribe(segment_path)["text"]
-                speaker_segment_audio, _ = librosa.load(segment_path, sr=16000)
+                # Temporarily save the speaker segment to transcribe
+                temp_segment_path = os.path.join(output_dir, f"temp_segment_{chunk_idx//chunk_size}_{speaker_idx}.wav")
+                sf.write(temp_segment_path, speaker_segment, sr)
+                
+                transcription = whisper_model.transcribe(temp_segment_path)["text"]
+                speaker_segment_audio, _ = librosa.load(temp_segment_path, sr=16000)
     
                 emotion = extract_emotion(speaker_segment_audio)
                 all_data.append({
@@ -234,9 +236,12 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
                     'Age': float(age),
                     'Gender': int(gender),
                     'Transcription': transcription,
-                    'emotion' :emotion,
-                    'Audio File Path': segment_path
+                    'emotion': emotion,
+                    'Audio File Path': chunk_filename
                 })
+                
+                # Remove temporary segment file
+                os.remove(temp_segment_path)
         
         except Exception as e:
             print(f"Error processing chunk {chunk_filename}: {e}")
@@ -245,13 +250,26 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     
+    # Create DataFrame and save to CSV
     df = pd.DataFrame(all_data)
-   
-    output_csv = "temp_out.csv"
+    output_csv = f"{base_filename}_processed_data.csv"
     df.to_csv(output_csv, index=False)
-    print(f"Processed audio saved to {output_csv}")
+    print(f"Processed audio data saved to {output_csv}")
     return df
 
 if __name__ == "__main__":
-    audio_path = "temporary_folder/A one minute TEDx Talk for the digital age _ Woody Roseland _ TEDxMileHigh.mp4"
-    process_large_audio(audio_path)
+    download_dir = "downloads"
+    
+    # List of supported audio file extensions
+    # audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg']
+    
+    for filename in os.listdir(download_dir):
+        audio_path = os.path.join(download_dir, filename)
+        
+        if os.path.isfile(audio_path):
+            try:
+                print(f"Processing audio file: {filename}")
+                process_large_audio(audio_path)
+                print(f"Successfully processed {filename}")
+            except Exception as e:
+                print(f"Error processing {filename}: {e}")

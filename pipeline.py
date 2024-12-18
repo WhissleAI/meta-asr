@@ -111,44 +111,29 @@ def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: s
 
     return audio_segments
 def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000) -> str:
-    try:
-        # Consider caching model and feature extractor
-        model_name = "superb/hubert-large-superb-er"
+    model_name = "superb/hubert-large-superb-er"
         
-        # Lazy loading of models
-        if not hasattr(extract_emotion, 'model'):
-            extract_emotion.model = AutoModelForAudioClassification.from_pretrained(model_name)
-            extract_emotion.feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
+    if not hasattr(extract_emotion, 'model'):
+        extract_emotion.model = AutoModelForAudioClassification.from_pretrained(model_name)
+        extract_emotion.feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
         
-        # More comprehensive input validation
-        if audio_data is None or len(audio_data) == 0:
-            return "No Audio"
+    if audio_data is None or len(audio_data) == 0:
+        return "No Audio"
         
-        if len(audio_data) < sampling_rate:
-            return "Audio Too Short"
+    if len(audio_data) < sampling_rate:
+        return "Audio Too Short"
 
-        inputs = extract_emotion.feature_extractor(
+    inputs = extract_emotion.feature_extractor(
             audio_data, 
             sampling_rate=sampling_rate, 
             return_tensors="pt", 
             padding=True
-        )
+    )
 
-        outputs = extract_emotion.model(**inputs)
-        predicted_class_idx = outputs.logits.argmax(-1).item()
+    outputs = extract_emotion.model(**inputs)
+    predicted_class_idx = outputs.logits.argmax(-1).item()
         
-        return extract_emotion.model.config.id2label.get(predicted_class_idx, "Unknown")
-
-    except RuntimeError as cuda_err:
-        print(f"CUDA Error: {cuda_err}. Try reducing batch size or model complexity.")
-        return "Processing Error"
-    except Exception as e:
-        print(f"Unexpected error in emotion extraction: {e}")
-        return "Error"
-
-    except Exception as e:
-        print(f"Error in emotion extraction: {e}")
-        return "Error"
+    return extract_emotion.model.config.id2label.get(predicted_class_idx, "Unknown")
 
 
 def convert_mp4_to_wav(mp4_path: str) -> str:

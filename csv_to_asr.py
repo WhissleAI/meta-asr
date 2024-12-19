@@ -2,30 +2,21 @@ import pandas as pd
 import numpy as np
 
 def clean_csv(csv_path):
-    """Clean CSV by removing invalid rows and saving a new cleaned version."""
-    # Read the CSV file
     df = pd.read_csv(csv_path)
-    
-    # Create a mask for valid rows
+
     valid_rows = (
-        # Check Transcription is not empty or NaN
         df['Transcription'].notna() & 
         (df['Transcription'] != '') &
-        # Check Age is numeric and within reasonable range
         df['Age'].notna() &
         (df['Age'] >= 0) & 
         (df['Age'] <= 100) &
-        # Check Gender is valid (0 or 1)
         df['Gender'].isin([0, 1]) &
-        # Check emotion is not empty and is a valid category
         df['emotion'].notna() &
         df['emotion'].str.lower().isin(['hap', 'ang', 'neu', 'sad'])
     )
-    
-    # Apply the mask to get clean data
+
     clean_df = df[valid_rows].copy()
-    
-    # Save cleaned CSV
+
     clean_csv_path = csv_path.replace('.csv', '_cleaned.csv')
     clean_df.to_csv(clean_csv_path, index=False)
     
@@ -94,24 +85,19 @@ def process_csv_files(directory):
     
     for filename in os.listdir(directory):
         if filename.endswith('.csv'):
-            try:
-                csv_path = os.path.join(directory, filename)
-                print(f"\nProcessing {filename}...")
+            csv_path = os.path.join(directory, filename)
+            print(f"\nProcessing {filename}...")
                 
-                # First clean the CSV
-                clean_csv_path = clean_csv(csv_path)
+            clean_csv_path = clean_csv(csv_path)
+
+            output_path = os.path.join(directory, f"{os.path.splitext(filename)[0]}_formatted.txt")
+            formatted_text = format_conversation(clean_csv_path)
                 
-                # Then format the cleaned CSV
-                output_path = os.path.join(directory, f"{os.path.splitext(filename)[0]}_formatted.txt")
-                formatted_text = format_conversation(clean_csv_path)
-                
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(formatted_text)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(formatted_text)
                     
-                print(f"Created formatted text file: {output_path}")
-                
-            except Exception as e:
-                print(f"Error processing {filename}: {e}")
+            print(f"Created formatted text file: {output_path}")
+
 
 if __name__ == "__main__":
     process_csv_files("csv_dir")

@@ -162,7 +162,7 @@ def process_large_audio(audio_path: str, chunk_duration: float = 20.0):
     signal, sr = librosa.load(processed_audio_path, sr=16000)
     total_duration = len(signal) / sr
 
-    output_dir = "chunks"
+    output_dir = "audio_chunks"
     os.makedirs(output_dir, exist_ok=True)
 
     all_data = []
@@ -245,7 +245,7 @@ if __name__ == "__main__":
     download_dir = "downloads"
     
     # List of supported audio file extensions
-    # audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg']
+    audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg']
     
     for filename in os.listdir(download_dir):
         audio_path = os.path.join(download_dir, filename)

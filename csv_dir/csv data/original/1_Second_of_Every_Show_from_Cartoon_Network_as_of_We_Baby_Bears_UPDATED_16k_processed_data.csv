@@ -1,8 +1,0 @@
-Start Time,End Time,Speaker,Age,Gender,Transcription,emotion,Audio File Path
-6.122843750000001,9.04221875,SPEAKER_02,0.3705059289932251,0,あぶ!ほつ!,hap,1_Second_of_Every_Show_from_Cartoon_Network_as_of_We_Baby_Bears_UPDATED_16k_chunk_0.wav
-10.98284375,13.227218750000002,SPEAKER_03,0.2877865433692932,0, Hello? Nah.,hap,1_Second_of_Every_Show_from_Cartoon_Network_as_of_We_Baby_Bears_UPDATED_16k_chunk_0.wav
-14.52659375,18.05346875,SPEAKER_00,0.3911159336566925,1, Alright! Spies! Run!,hap,1_Second_of_Every_Show_from_Cartoon_Network_as_of_We_Baby_Bears_UPDATED_16k_chunk_0.wav
-7.9790937500000005,10.03784375,SPEAKER_00,0.23556354641914368,0, What does that mean? What does that mean? Hmmh.. That hurts,hap,1_Second_of_Every_Show_from_Cartoon_Network_as_of_We_Baby_Bears_UPDATED_16k_chunk_1.wav
-2.03909375,7.03409375,SPEAKER_02,0.40318483114242554,1, you,sad,1_Second_of_Every_Show_from_Cartoon_Network_as_of_We_Baby_Bears_UPDATED_16k_chunk_2.wav
-7.03409375,9.78471875,SPEAKER_00,0.48794612288475037,0, It's life in the fast like I A A A A A,hap,1_Second_of_Every_Show_from_Cartoon_Network_as_of_We_Baby_Bears_UPDATED_16k_chunk_2.wav
-11.337218750000002,13.497218750000002,SPEAKER_03,0.31377243995666504,1, Two eggs! I don't want to be a bitch!,hap,1_Second_of_Every_Show_from_Cartoon_Network_as_of_We_Baby_Bears_UPDATED_16k_chunk_2.wav

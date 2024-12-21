@@ -208,15 +208,6 @@ class ChunkData:
         else: return "60plus"
 
 def create_output_directories(base_path: str) -> Tuple[str, str]:
-    """
-    Create organized directory structure for output files.
-    
-    Args:
-        base_path: Base directory path for outputs
-        
-    Returns:
-        Tuple of paths for audio chunks and results
-    """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     chunks_dir = os.path.join(base_path, "audio_chunks", timestamp)
     results_dir = os.path.join(base_path, "results", timestamp)
@@ -231,18 +222,6 @@ def process_large_audio(
     chunk_duration: float = 20.0,
     output_base_dir: str = "output"
 ) -> Tuple[pd.DataFrame, List[Dict[str, str]]]:
-    """
-    Process large audio file with chunk-level text grouping and per-file JSON output.
-    
-    Args:
-        audio_path: Path to the audio file
-        chunk_duration: Duration of each chunk in seconds
-        output_base_dir: Base directory for organizing output files
-        
-    Returns:
-        Tuple containing DataFrame of all segments and list of chunk-level text data
-    """
-    # Create organized directory structure
     chunks_dir, results_dir = create_output_directories(output_base_dir)
     
     processed_audio_path = convert_mp4_to_wav(audio_path)
@@ -384,7 +363,7 @@ def process_large_audio(
 if __name__ == "__main__":
     download_dir = "downloads"
     
-    # List of supported audio file extensions
+   
     audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg']
     
     for filename in os.listdir(download_dir):
@@ -393,7 +372,7 @@ if __name__ == "__main__":
         if os.path.isfile(audio_path):
             try:
                 print(f"Processing audio file: {filename}")
-                df, chunk_texts = process_large_audio(audio_path)  # Now unpacking both return values
+                df, chunk_texts = process_large_audio(audio_path) 
                 print(f"Successfully processed {filename}")
             except Exception as e:
                 print(f"Error processing {filename}: {e}")

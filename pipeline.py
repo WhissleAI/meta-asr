@@ -208,9 +208,8 @@ class ChunkData:
         else: return "60plus"
 
 def create_output_directories(base_path: str) -> Tuple[str, str]:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    chunks_dir = os.path.join(base_path, "audio_chunks", timestamp)
-    results_dir = os.path.join(base_path, "results", timestamp)
+    chunks_dir =  "audio_chunks"
+    results_dir = "results"
     
     os.makedirs(chunks_dir, exist_ok=True)
     os.makedirs(results_dir, exist_ok=True)
@@ -326,7 +325,6 @@ def process_large_audio(
             continue
         
         finally:
-            # Clean up memory
             del chunk
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()

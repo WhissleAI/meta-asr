@@ -1,0 +1,112 @@
+Start Time,End Time,Speaker,Age,Gender,Transcription,emotion,Audio File Path
+0.03096875,1.53284375,SPEAKER_00,0.22302237153053284,0, That's not good!,neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_0.wav
+0.03096875,2.52846875,SPEAKER_00,0.30035075545310974,1,,sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_1.wav
+16.652843750000002,18.188468750000002,SPEAKER_00,0.34094518423080444,0," Ah, Motorcycle.",neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_2.wav
+1.7690937500000001,5.549093750000001,SPEAKER_00,0.28129953145980835,1,,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_3.wav
+10.290968750000001,12.636593750000003,SPEAKER_00,0.3290378749370575,0," Brighter, I can see your light. Hang on.",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_5.wav
+10.88159375,13.952843750000003,SPEAKER_01,0.270595908164978,0, I can do this. I can do this.,sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_6.wav
+14.594093750000003,18.07034375,SPEAKER_00,0.3094547390937805,0, I can do this! Urgh! Graftly Hover!,neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_6.wav
+13.395968750000002,17.074718750000002,SPEAKER_00,0.28978580236434937,0, I chose you because you were the braveest cop I'd ever seen.,sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_8.wav
+18.47534375,19.977218750000002,SPEAKER_01,0.3814527988433838,1,,sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_8.wav
+16.46721875,18.15471875,SPEAKER_01,0.2818090319633484,0,ap,sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_10.wav
+18.15471875,19.977218750000002,SPEAKER_00,0.3530941307544708,0, I can't believe you found me!,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_10.wav
+0.77346875,2.71409375,SPEAKER_01,0.2752242088317871,0," You can always count on me, Ryder.",ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_11.wav
+5.34659375,9.025343750000001,SPEAKER_03,0.326124906539917,0," Come on, we gotta get outta here! I can't! I'm stuck!",ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_11.wav
+10.08846875,14.037218750000001,SPEAKER_02,0.30483272671699524,2," On three, pull as hard as you can. One, two...",neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_11.wav
+14.037218750000001,19.977218750000002,SPEAKER_00,0.35846301913261414,1," Three, and uh it won't-",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_11.wav
+3.06846875,5.785343750000001,SPEAKER_01,0.38430166244506836,0, One more try. Raargh!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_12.wav
+1.68471875,5.464718750000001,SPEAKER_01,0.30715304613113403,0," I told you you were a hero. Now come on, let's get out of here.",ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_13.wav
+8.46846875,14.037218750000001,SPEAKER_03,0.3873676061630249,0," We're a team! When you go up against one of us, you go up against all of us. Bye! Have it your way!",ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_13.wav
+2.03909375,6.342218750000001,SPEAKER_00,0.2593253254890442,0, Keep your hands up our vehicles! You killer walking!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_16.wav
+11.47221875,14.037218750000001,SPEAKER_01,0.3520299792289734,0, Look at me! I'm... I'm...,neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_18.wav
+14.037218750000001,19.977218750000002,SPEAKER_00,0.34570756554603577,0," That's my super power! I'm elastic and fantastic! Um, Liberty?",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_18.wav
+1.0265937500000002,4.334093750000001,SPEAKER_00,0.2919611930847168,0, Can you please get us out of here? No problem.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_19.wav
+8.164718750000002,13.480343750000003,SPEAKER_02,0.44071903824806213,0," Nice catch, Liberty. I've been trying to be more flexible, but this is ridiculous.",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_19.wav
+13.193468750000001,19.234718750000003,SPEAKER_01,0.35908645391464233,0," Alright puppies, play time's over! Get me back that crystal!",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_19.wav
+10.18971875,13.058468750000003,SPEAKER_00,0.2834876477718353,0," Where did it go? Over here, dude.",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_20.wav
+10.98284375,18.981593750000002,SPEAKER_01,0.2707146406173706,0," These crystals belong to us, dude. No!",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_21.wav
+12.974093750000002,16.450343750000002,SPEAKER_00,0.3709370493888855,0, It's time to shut down that meteor magnet once and for all.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_22.wav
+0.03096875,4.3678437500000005,SPEAKER_00,0.30429473519325256,0, Wanna go for a ride? Teamwork makes the dream work!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_23.wav
+0.03096875,1.95471875,SPEAKER_00,0.33820903301239014,0, How do you like me now?,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_24.wav
+8.974718750000001,11.978468750000001,SPEAKER_01,0.4816744327545166,1, Good Squammon!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_24.wav
+13.919093750000002,17.32784375,SPEAKER_02,0.4173293113708496,0, Put me down! Let me go!,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_24.wav
+0.03096875,1.53284375,SPEAKER_00,0.5420506000518799,1, Welcome to your new home.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_25.wav
+9.818468750000001,11.40471875,SPEAKER_00,0.3338463306427002,2, What is this place?,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_25.wav
+11.57346875,16.46721875,SPEAKER_03,0.5372778177261353,1, It's fuzzy body so billion school isn't it awesome? What?,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_25.wav
+16.70346875,19.977218750000002,SPEAKER_01,0.4475629925727844,1, We're gonna learn so many new tricks like sit and roll,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_25.wav
+0.03096875,2.79846875,SPEAKER_00,0.4092103838920593,1,G em'oeveir and cya!...,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_26.wav
+3.5915937500000004,8.46846875,SPEAKER_03,0.31551966071128845,0," Ugh, Barney, how many times do I have to tell you? It's not an obedience school in-",ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_26.wav
+8.46846875,14.00346875,SPEAKER_04,0.30919232964515686,0, more. Mayor Humdinger's Goons took over this place and turned it into a jail.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_26.wav
+14.52659375,18.981593750000002,SPEAKER_02,0.3905320167541504,0, not exactly a dog lover. He's more of a cat person.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_26.wav
+0.36846875,3.54096875,SPEAKER_00,0.45879673957824707,1, He's rounding up all the dogs in the city and locking us in here.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_27.wav
+4.199093749999999,7.202843750000001,SPEAKER_02,0.48127180337905884,0, That's terrible. Never let your guard down in here.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_27.wav
+7.202843750000001,13.53096875,SPEAKER_03,0.5879441499710083,0, There's one guy you gotta watch out for. He'll sneak up behind you when you least expect it.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_27.wav
+14.695343750000003,19.977218750000002,SPEAKER_01,0.44516849517822266,0, Ha! Maybe it's! Don't worry guys! I'll protect you! Leave my friends!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_27.wav
+0.03096875,4.620968749999999,SPEAKER_01,0.3857435882091522,1,patriku,neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_28.wav
+12.602843750000002,19.977218750000002,SPEAKER_02,0.22890456020832062,0," I don't even know anymore. I thought I was a member of the Paw Patrol, but now I feel like they're better off without me.",sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_28.wav
+0.03096875,1.83659375,SPEAKER_01,0.4489322304725647,1, What makes you say a thing like that?,neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_29.wav
+2.22471875,4.806593750000001,SPEAKER_00,0.2131260484457016,0, I keep messing up and letting everyone down.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_29.wav
+6.443468750000001,10.52721875,SPEAKER_03,0.4187079071998596,0, can't even with all this negativity. Just ignore her.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_29.wav
+10.52721875,14.712218750000002,SPEAKER_01,0.3453301191329956,1, She's all bark and no bite now pick yourself a doghouse,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_29.wav
+2.14034375,4.334093750000001,SPEAKER_00,0.2965417504310608,0,,sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_30.wav
+12.78846875,15.99471875,SPEAKER_03,0.30858349800109863,0, ¡Líberni! ¡Qué gusto verte! ¡Has like!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_30.wav
+15.99471875,19.977218750000002,SPEAKER_02,0.3756304979324341,0," I'm just turning you these days. Carmen, I got no time for chit chat. We're in a jam.",ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_30.wav
+0.03096875,3.52409375,SPEAKER_00,0.32492807507514954,0, and we need your help. Have you seen this dog? No.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_31.wav
+3.52409375,8.83971875,SPEAKER_03,0.44248533248901367,0," No, I haven't seen him. If you want, you can put his picture up on the wall.",sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_31.wav
+13.83471875,19.977218750000002,SPEAKER_02,0.28072503209114075,0," Lots of dogs going missing lately. I'm keeping my eyes open, but it's like they just...",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_31.wav
+1.36409375,6.61221875,SPEAKER_01,0.4023663103580475,0, Disappeared. How long has this been happening? It started a couple days ago.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_32.wav
+6.61221875,10.476593750000003,SPEAKER_02,0.3583539128303528,0, Now half my customers are missing a dog. This can't be a co-,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_32.wav
+10.476593750000003,19.977218750000002,SPEAKER_00,0.3542131185531616,0, Someone's gotta be taking them. Dognapping? Who would do that? Humbinger! It's gotta be him! He hates dogs more than anything!,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_32.wav
+0.03096875,5.39721875,SPEAKER_03,0.27334684133529663,0, But where is he taking them? I think I know how we can find out. How? I'm a dog.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_33.wav
+5.39721875,11.978468750000001,SPEAKER_02,0.3488214910030365,0," I'm also kind of an honorary member of the Paw Patrol. So I'll be the bait. I get captured, you tell me, and boom.",ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_33.wav
+11.978468750000001,14.52659375,SPEAKER_01,0.3905503749847412,0, find out where he's taking that.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_33.wav
+14.52659375,18.59346875,SPEAKER_00,0.3739975690841675,0, actually work. We just need to figure out how to get Humdinger's attention.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_33.wav
+0.92534375,5.9372187499999995,SPEAKER_00,0.23955069482326508,2, The Paw Patrol is here! Cut the engines and I'll carry the plane down safely.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_35.wav
+5.9372187499999995,7.72596875,SPEAKER_02,0.4760197401046753,0, And here you are!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_35.wav
+9.480968750000002,12.822218750000001,SPEAKER_01,0.5773187279701233,1, It worked exactly like she said it would.,neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_35.wav
+15.57284375,19.977218750000002,SPEAKER_03,0.4119385778903961,0," I mean, you can't... like Crystal! It's like taking candy from a bed!",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_35.wav
+0.03096875,6.764093750000001,SPEAKER_01,0.3679080903530121,0," Beep. Give that back! Ugh! Woo! You're icy one, aren't you? Ugh! Ugh!",sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_36.wav
+9.059093750000002,12.29909375,SPEAKER_02,0.3917228877544403,0, Catch you real! Hits quick. Bye bye!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_36.wav
+14.037218750000001,16.78784375,SPEAKER_00,0.5518065094947815,1, Thank you for flying air humblinger.,neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_36.wav
+11.134718750000001,16.973468750000002,SPEAKER_01,0.24759641289710999,0," Ryder, come in! This is Sky! How's it going up there? It was a trap! They stole my crystal!",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_38.wav
+16.973468750000002,19.977218750000002,SPEAKER_00,0.29972293972969055,0, got no powers and this plane is going down.,ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_38.wav
+0.03096875,7.03409375,SPEAKER_02,0.3183208107948303,0, Where are you right now? Ugh! I can't get a visual! Hang on! Can you make it back to the airport?,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_39.wav
+10.223468750000002,14.661593750000002,SPEAKER_00,0.3537467122077942,0, It's too far! I need a place to land this thing now!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_39.wav
+16.28159375,18.981593750000002,SPEAKER_01,0.3357696533203125,0, I hope you there will have to improvise.,neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_39.wav
+7.371593750000001,9.531593750000003,SPEAKER_01,0.4018852710723877,0, Sky we're clearing a runway. I need to just-,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_40.wav
+9.531593750000003,16.129718750000002,SPEAKER_00,0.290647029876709,0, The set of course for Mainstream. Did you say Mainstream? A permanent. That's the busiest street in Adventure City.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_40.wav
+4.06409375,8.535968750000002,SPEAKER_01,0.31789839267730713,0," Alright, Pups, we need to make a runway and we don't have much time. Oh, let's...",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_41.wav
+8.535968750000002,12.029093750000001,SPEAKER_00,0.3413003087043762,0," Stupid people, you don't have to go home, but you can't stay.",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_41.wav
+13.615343750000001,17.80034375,SPEAKER_02,0.37968727946281433,0," Chase, mark the runway all the way down. Cates is on the case.",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_41.wav
+2.83221875,6.0553437500000005,SPEAKER_00,0.3360631465911865,0, I feel the need for super speed!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_42.wav
+8.012843750000002,10.15596875,SPEAKER_01,0.3737298846244812,0, This intersection is closed.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_43.wav
+14.070968750000002,16.14659375,SPEAKER_00,0.27841851115226746,2," Alright, let's do this.",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_43.wav
+0.03096875,6.03846875,SPEAKER_00,0.3619050979614258,0, Close your eyes and listen to the calming sound of my voice.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_44.wav
+9.869093750000001,11.37096875,SPEAKER_01,0.28001540899276733,0, I'm on final pro.,neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_44.wav
+9.160343750000003,13.024718750000002,SPEAKER_02,0.3255438208580017,0," Come on baby, soft landing, soft landing.",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_45.wav
+16.04534375,17.766593750000002,SPEAKER_01,0.3541463315486908,0," Okay, hard landing.",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_45.wav
+4.21596875,8.974718750000001,SPEAKER_02,0.3289949297904968,0," Whoa, whoa, whoa, whoa, whoa, whoa! Uh!",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_46.wav
+8.974718750000001,10.476593750000003,SPEAKER_03,0.36956411600112915,2,,sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_46.wav
+7.21971875,9.531593750000003,SPEAKER_02,0.22880585491657257,0, Get out of the way! Move! Move!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_47.wav
+9.531593750000003,14.982218750000001,SPEAKER_01,0.3968160152435303,0, You gotta know how to talk to people. Now go!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_47.wav
+14.982218750000001,19.977218750000002,SPEAKER_00,0.3400673270225525,0," Excuse me, Sparky! Come and do, come and stay! Dready!",sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_47.wav
+7.9790937500000005,11.387843750000002,SPEAKER_01,0.2951776385307312,0," Right, they're riding it by the way. Whoa! Whoa!",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_48.wav
+15.15096875,19.977218750000002,SPEAKER_00,0.2414788156747818,0," Ha ha, you see that? I'm like a furry GPS! Ah, turn left! Whoa!",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_48.wav
+6.764093750000001,8.738468750000003,SPEAKER_02,0.2824918329715729,0, you have reached your destination.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_49.wav
+9.970343750000001,14.62784375,SPEAKER_01,0.3771322965621948,0, Now we know what happens when you give Humdinger Fireworks.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_49.wav
+14.982218750000001,19.977218750000002,SPEAKER_00,0.5043728947639465,0, The Paw Patrol? What are they doing in Adventure City? Chase. S-,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_49.wav
+0.03096875,2.52846875,SPEAKER_00,0.33208543062210083,0, perimeter. Traces on the cake.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_50.wav
+6.2915937500000005,10.98284375,SPEAKER_02,0.3311375379562378,0," Marshall Rocky, put out those fireworks. Let's kick the tires and fight some!",neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_51.wav
+10.98284375,13.024718750000002,SPEAKER_01,0.2772923707962036,0, Fire,neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_51.wav
+16.33221875,19.977218750000002,SPEAKER_00,0.4806287884712219,1," Mr. Mayor, we've got to get you out of here. I can't believe the popper.",ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_51.wav
+0.03096875,7.472843750000001,SPEAKER_02,0.4713793396949768,0," crashed my party. Yes, sir. I can't stand those dogs. Everyone knows you're a cat person. I can't stand them, sir. Hey, wait a...",ang,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_52.wav
+7.472843750000001,9.68346875,SPEAKER_03,0.38352322578430176,1,,sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_52.wav
+0.03096875,2.29221875,SPEAKER_01,0.24820823967456818,0, Our water cannon!,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_53.wav
+8.14784375,11.25284375,SPEAKER_00,0.3451848328113556,0," Yes, now that's what I'm talking about.",sad,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_53.wav
+0.03096875,2.03909375,SPEAKER_00,0.3169933557510376,0," Nice work, Marshall. Thank you.",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_54.wav
+3.40596875,8.02971875,SPEAKER_01,0.2736603021621704,0," Rocky, you're up! Okay, I got it from here!",neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_54.wav
+0.03096875,1.53284375,SPEAKER_00,0.3590981066226959,0," 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아, 아",neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_55.wav
+14.67846875,19.977218750000002,SPEAKER_01,0.39667701721191406,0," Ryder, we've got people trapped on the balcony. I'm going in. Copy that.",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_55.wav
+14.273468750000003,16.93971875,SPEAKER_00,0.31194135546684265,0, Everything's gonna be fine. I'm gonna get you out of here.,hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_56.wav
+5.835968750000001,7.658468750000001,SPEAKER_00,0.32363590598106384,0," Marshall, chase me to hell!",neu,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_57.wav
+10.83096875,12.41721875,SPEAKER_00,0.3786308467388153,0," It's okay buddy, I've gotcha!",hap,ALL_the_BEST_Scenes_with_CHASE_Paw_Patrol_Movies_Compilation_4K_16k_chunk_59.wav

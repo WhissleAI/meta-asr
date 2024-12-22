@@ -98,6 +98,5 @@ def process_csv_files(directory):
                     
             print(f"Created formatted text file: {output_path}")
 
-
 if __name__ == "__main__":
     process_csv_files("csv_dir")

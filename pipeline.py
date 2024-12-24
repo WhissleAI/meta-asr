@@ -1,4 +1,5 @@
 import os
+import json
 import torch
 import librosa
 import numpy as np
@@ -6,19 +7,22 @@ import pandas as pd
 import moviepy as mp
 import torch.nn as nn
 import soundfile as sf
+from pathlib import Path
 from dotenv import load_dotenv
 from whisper import load_model
+from flair.data import Sentence
 from pyannote.audio import Pipeline
+from collections import defaultdict
+from flair.models import SequenceTagger
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
-from collections import defaultdict
-import json
-from pathlib import Path
 from convert_mp4_mp3 import MP4AudioChunkConverter
 from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC, Wav2Vec2PreTrainedModel, Wav2Vec2Model
-from datetime import datetime
 load_dotenv()
+
+
+ner_tagger = SequenceTagger.load("flair/ner-english-ontonotes-large")
 
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
@@ -173,6 +177,40 @@ class AudioSegment:
     transcription: str
     emotion: str
     chunk_filename: str
+    ner_tags: List[Dict[str, Any]] = field(default_factory=list)
+
+def process_ner(text: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Process text with NER and return formatted text along with entity details.
+    
+    Args:
+        text (str): Input text.
+        
+    Returns:
+        Tuple[str, List[Dict[str, Any]]]: Formatted text and a list of detected entities.
+    """
+    sentence = Sentence(text)
+    ner_tagger.predict(sentence)
+    
+    entities = []
+    formatted_text = text
+    
+    # Replace entities in the text with the desired format
+    for entity in sentence.get_spans('ner'):
+        entity_text = entity.text
+        entity_type = entity.tag
+        replacement = f"NER_{entity_type} {entity_text} END"
+        formatted_text = formatted_text.replace(entity_text, replacement, 1)
+        
+        entities.append({
+            "text": entity_text,
+            "type": entity_type,
+            "start_position": entity.start_position,
+            "end_position": entity.end_position
+        })
+    
+    return formatted_text, entities
+
 
 @dataclass
 class ChunkData:
@@ -188,13 +226,18 @@ class ChunkData:
         for segment in self.segments:
             age_bucket = self.get_age_bucket(segment.age)
             gender_text = "MALE" if segment.gender == 1 else "FEMALE"
-            metadata = f"AGE_{age_bucket} GENDER_{gender_text} EMOTION_{segment.emotion.upper()}"
             
+            # Process transcription through NER
+            ner_text, entities = process_ner(segment.transcription.lower())
+            segment.ner_tags = entities  # Store NER tags in segment
+            
+            # Add metadata before the text if speaker changes
             if current_speaker != segment.speaker:
-                metadata += " SPEAKER_CHANGE"
+                metadata = f"AGE_{age_bucket} GENDER_{gender_text} EMOTION_{segment.emotion.upper()} SPEAKER_CHANGE"
                 current_speaker = segment.speaker
-                
-            texts.append(f"{segment.transcription.lower()} {metadata}")
+                texts.append(f"{metadata} {ner_text}")
+            else:
+                texts.append(ner_text)
         
         return " ".join(texts)
 
@@ -208,20 +251,27 @@ class ChunkData:
         else: return "60plus"
 
 def create_output_directories(base_path: str) -> Tuple[str, str]:
-    chunks_dir =  "audio_chunks"
-    results_dir = "results"
+    """Create necessary output directories."""
+    chunks_dir = os.path.join(base_path, "audio_chunks")
+    results_dir = os.path.join(base_path, "results")
     
     os.makedirs(chunks_dir, exist_ok=True)
     os.makedirs(results_dir, exist_ok=True)
     
     return chunks_dir, results_dir
 
+
 def process_large_audio(
     audio_path: str, 
     chunk_duration: float = 20.0,
     output_base_dir: str = "output"
 ) -> Tuple[pd.DataFrame, List[Dict[str, str]]]:
-    chunks_dir, results_dir = create_output_directories(output_base_dir)
+    # Create output directories with absolute paths
+    chunks_dir = os.path.abspath(os.path.join(output_base_dir, "audio_chunks"))
+    results_dir = os.path.abspath(os.path.join(output_base_dir, "results"))
+    
+    os.makedirs(chunks_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
     
     processed_audio_path = convert_mp4_to_wav(audio_path)
     signal, sr = librosa.load(processed_audio_path, sr=16000)
@@ -233,7 +283,6 @@ def process_large_audio(
     base_filename = os.path.splitext(os.path.basename(audio_path))[0]
     
     for chunk_idx in range(0, len(signal), chunk_size):
-        # Memory management for GPU
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -283,94 +332,113 @@ def process_large_audio(
                 )
                 sf.write(temp_segment_path, speaker_segment, sr)
                 
-                # Extract features
-                transcription = whisper_model.transcribe(temp_segment_path)["text"]
-                speaker_segment_audio, _ = librosa.load(temp_segment_path, sr=16000)
-                emotion = extract_emotion(speaker_segment_audio)
+                try:
+                    # Extract emotion
+                    speaker_segment_audio, _ = librosa.load(temp_segment_path, sr=16000)
+                    emotion = extract_emotion(speaker_segment_audio)
+                    
+                    # Get transcription and process NER
+                    transcription = whisper_model.transcribe(temp_segment_path)["text"]
+                    ner_text, ner_entities = process_ner(transcription)
+                    
+                    # Create segment object
+                    segment = AudioSegment(
+                        start_time=start_time,
+                        end_time=end_time,
+                        speaker=speaker,
+                        age=float(age),
+                        gender=int(gender),
+                        transcription=transcription,
+                        emotion=emotion,
+                        chunk_filename=chunk_filename,
+                        ner_tags=ner_entities
+                    )
+                    
+                    # Add to all_data for CSV
+                    all_data.append({
+                        'Start Time': start_time,
+                        'End Time': end_time,
+                        'Speaker': speaker,
+                        'Age': float(age),
+                        'Gender': int(gender),
+                        'Transcription': transcription,
+                        'NER_Tagged_Text': ner_text,
+                        'NER_Entities': json.dumps(ner_entities),
+                        'emotion': emotion,
+                        'Audio File Path': chunk_filename
+                    })
+                    
+                    # Add to chunk_data for JSON
+                    relative_path = os.path.join("audio_chunks", base_filename, chunk_filename)
+                    chunk_data[chunk_filename].segments.append(segment)
+                    chunk_data[chunk_filename].filepath = relative_path
+                    
+                except Exception as e:
+                    print(f"Error processing segment in chunk {chunk_filename}: {str(e)}")
+                    continue
                 
-                # Create segment object
-                segment = AudioSegment(
-                    start_time=start_time,
-                    end_time=end_time,
-                    speaker=speaker,
-                    age=float(age),
-                    gender=int(gender),
-                    transcription=transcription,
-                    emotion=emotion,
-                    chunk_filename=chunk_filename
-                )
-                
-                # Add to all_data for CSV
-                all_data.append({
-                    'Start Time': start_time,
-                    'End Time': end_time,
-                    'Speaker': speaker,
-                    'Age': float(age),
-                    'Gender': int(gender),
-                    'Transcription': transcription,
-                    'emotion': emotion,
-                    'Audio File Path': chunk_filename
-                })
-                
-                # Add to chunk_data for JSON
-                relative_path = os.path.join("audio_chunks", base_filename, chunk_filename)
-                chunk_data[chunk_filename].segments.append(segment)
-                chunk_data[chunk_filename].filepath = relative_path
-        
-                # Clean up temporary files
-                os.remove(temp_segment_path)
+                finally:
+                    if os.path.exists(temp_segment_path):
+                        os.remove(temp_segment_path)
         
         except Exception as e:
-            print(f"Error processing chunk {chunk_filename}: {e}")
+            print(f"Error processing chunk {chunk_filename}: {str(e)}")
             continue
-        
+            
         finally:
             del chunk
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
     
-    # Create DataFrame for CSV
-    df = pd.DataFrame(all_data)
-    csv_path = os.path.join(results_dir, f"{base_filename}_processed_data.csv")
-    df.to_csv(csv_path, index=False)
-    print(f"Processed audio data saved to {csv_path}")
-    
-    # Create chunk-level text data
-    chunk_texts = [
-        {
-            "audio_filepath": data.filepath,
-            "text": data.get_formatted_text()
-        }
-        for data in chunk_data.values()
-    ]
-    
-    # Save JSON output with unique filename
-    json_path = os.path.join(results_dir, f"{base_filename}_audio_text_pairs.json")
-    with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(
-            chunk_texts,
-            f,
-            indent=2,
-            ensure_ascii=False
-        )
-    print(f"Created JSON file with {len(chunk_texts)} entries: {json_path}")
+    # Save results only if we have processed data
+    if all_data:
+        # Save CSV
+        df = pd.DataFrame(all_data)
+        csv_path = os.path.join(results_dir, f"{base_filename}_processed_data.csv")
+        df.to_csv(csv_path, index=False)
+        print(f"Saved CSV to: {csv_path}")
+        
+        # Save JSON
+        chunk_texts = [
+            {
+                "audio_filepath": data.filepath,
+                "text": data.get_formatted_text()
+            }
+            for data in chunk_data.values()
+        ]
+        
+        json_path = os.path.join(results_dir, f"{base_filename}_audio_text_pairs.json")
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(chunk_texts, f, indent=2, ensure_ascii=False)
+        print(f"Saved JSON to: {json_path}")
     
     return df, chunk_texts
 
-
 if __name__ == "__main__":
-    download_dir = "downloads"
+    # Navigate up one level to workspace_himanshu and then into Data_store/converted_audio
+    download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "downloads")
+    download_dir = os.path.abspath(download_dir)  # Get absolute path
     
-   
+    # Create output directory
+    output_dir = os.path.abspath("output")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    print(f"Processing files from: {download_dir}")
+    print(f"Saving output to: {output_dir}")
+    
     audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg']
+    
+    if not os.path.exists(download_dir):
+        raise FileNotFoundError(f"Directory not found: {download_dir}")
     
     for filename in os.listdir(download_dir):
         audio_path = os.path.join(download_dir, filename)
         
-        if os.path.isfile(audio_path):
+        if os.path.isfile(audio_path) and any(filename.lower().endswith(ext) for ext in audio_extensions):
             try:
-                print(f"Processing audio file: {filename}")
-                df, chunk_texts = process_large_audio(audio_path) 
+                print(f"\nProcessing audio file: {filename}")
+                df, chunk_texts = process_large_audio(audio_path, output_base_dir=output_dir)
                 print(f"Successfully processed {filename}")
             except Exception as e:
-                print(f"Error processing {filename}: {e}")
+                print(f"Error processing {filename}: {str(e)}")
+                continue

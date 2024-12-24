@@ -21,14 +21,6 @@ from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC, Wav2Vec2PreTrainedModel, Wav2Vec2Model
 load_dotenv()
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
-processor = Wav2Vec2Processor.from_pretrained(model_name)
-model = AgeGenderModel.from_pretrained(model_name).to(device)
-ner_tagger = SequenceTagger.load("flair/ner-english-ontonotes-large")
-pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token=os.getenv("HF_TOKEN"))
-whisper_model = load_model("base").to(device)
-
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
         super().__init__()
@@ -64,6 +56,13 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         return hidden_states, logits_age, logits_gender
 
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
+processor = Wav2Vec2Processor.from_pretrained(model_name)
+model = AgeGenderModel.from_pretrained(model_name).to(device)
+ner_tagger = SequenceTagger.load("flair/ner-english-ontonotes-large")
+pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token=os.getenv("HF_TOKEN"))
+whisper_model = load_model("base").to(device)
 
 def process_func(x: np.ndarray, sampling_rate: int, embeddings: bool = False) -> np.ndarray:
     y = processor(x, sampling_rate=sampling_rate)
@@ -391,7 +390,7 @@ def process_large_audio(
     return df, chunk_texts
 
 if __name__ == "__main__":
-    download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "downloads")
+    download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "converted_audio")
     download_dir = os.path.abspath(download_dir) 
     output_dir = os.path.abspath("output")
     os.makedirs(output_dir, exist_ok=True)

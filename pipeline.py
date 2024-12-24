@@ -21,8 +21,13 @@ from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC, Wav2Vec2PreTrainedModel, Wav2Vec2Model
 load_dotenv()
 
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
+processor = Wav2Vec2Processor.from_pretrained(model_name)
+model = AgeGenderModel.from_pretrained(model_name).to(device)
 ner_tagger = SequenceTagger.load("flair/ner-english-ontonotes-large")
+pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token=os.getenv("HF_TOKEN"))
+whisper_model = load_model("base").to(device)
 
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
@@ -58,15 +63,6 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         logits_gender = torch.softmax(self.gender(hidden_states), dim=1)
         return hidden_states, logits_age, logits_gender
 
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
-processor = Wav2Vec2Processor.from_pretrained(model_name)
-model = AgeGenderModel.from_pretrained(model_name).to(device)
-
-pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token=os.getenv("HF_TOKEN"))
-
-whisper_model = load_model("base").to(device)
 
 
 def process_func(x: np.ndarray, sampling_rate: int, embeddings: bool = False) -> np.ndarray:
@@ -168,7 +164,6 @@ def convert_mp4_to_wav(mp4_path: str) -> str:
     return mp4_path
 @dataclass
 class AudioSegment:
-    """Data class to store processed audio segment information."""
     start_time: float
     end_time: float
     speaker: str
@@ -180,22 +175,13 @@ class AudioSegment:
     ner_tags: List[Dict[str, Any]] = field(default_factory=list)
 
 def process_ner(text: str) -> Tuple[str, List[Dict[str, Any]]]:
-    """
-    Process text with NER and return formatted text along with entity details.
-    
-    Args:
-        text (str): Input text.
-        
-    Returns:
-        Tuple[str, List[Dict[str, Any]]]: Formatted text and a list of detected entities.
-    """
+
     sentence = Sentence(text)
     ner_tagger.predict(sentence)
     
     entities = []
     formatted_text = text
     
-    # Replace entities in the text with the desired format
     for entity in sentence.get_spans('ner'):
         entity_text = entity.text
         entity_type = entity.tag
@@ -214,12 +200,10 @@ def process_ner(text: str) -> Tuple[str, List[Dict[str, Any]]]:
 
 @dataclass
 class ChunkData:
-    """Data class to store chunk-level aggregated data."""
     segments: List[AudioSegment] = field(default_factory=list)
     filepath: str = ""
     
     def get_formatted_text(self) -> str:
-        """Combine all segment transcriptions with their metadata."""
         texts = []
         current_speaker = None
         
@@ -227,23 +211,22 @@ class ChunkData:
             age_bucket = self.get_age_bucket(segment.age)
             gender_text = "MALE" if segment.gender == 1 else "FEMALE"
             
-            # Process transcription through NER
+        
             ner_text, entities = process_ner(segment.transcription.lower())
-            segment.ner_tags = entities  # Store NER tags in segment
+            segment.ner_tags = entities  
             
-            # Add metadata before the text if speaker changes
+            metadata = f"AGE_{age_bucket} GENDER_{gender_text} EMOTION_{segment.emotion.upper()}"
+            
             if current_speaker != segment.speaker:
-                metadata = f"AGE_{age_bucket} GENDER_{gender_text} EMOTION_{segment.emotion.upper()} SPEAKER_CHANGE"
+                metadata += " SPEAKER_CHANGE"
                 current_speaker = segment.speaker
-                texts.append(f"{metadata} {ner_text}")
-            else:
-                texts.append(ner_text)
+                
+            texts.append(f"{ner_text} {metadata}")
         
         return " ".join(texts)
 
     @staticmethod
     def get_age_bucket(age: float) -> str:
-        """Map age to predefined buckets."""
         if age < 18: return "0_18"
         elif age < 30: return "18_30"
         elif age < 45: return "30_45"
@@ -251,7 +234,6 @@ class ChunkData:
         else: return "60plus"
 
 def create_output_directories(base_path: str) -> Tuple[str, str]:
-    """Create necessary output directories."""
     chunks_dir = os.path.join(base_path, "audio_chunks")
     results_dir = os.path.join(base_path, "results")
     
@@ -266,7 +248,6 @@ def process_large_audio(
     chunk_duration: float = 20.0,
     output_base_dir: str = "output"
 ) -> Tuple[pd.DataFrame, List[Dict[str, str]]]:
-    # Create output directories with absolute paths
     chunks_dir = os.path.abspath(os.path.join(output_base_dir, "audio_chunks"))
     results_dir = os.path.abspath(os.path.join(output_base_dir, "results"))
     
@@ -314,7 +295,6 @@ def process_large_audio(
                 if len(speaker_segment) / sr < 1.5:
                     continue
                     
-                # Process audio segment
                 y = processor(speaker_segment, sampling_rate=sr)
                 y = y['input_values'][0]
                 y = y.reshape(1, -1)
@@ -324,8 +304,7 @@ def process_large_audio(
                     model_output = model(y)
                     age = float(model_output[1].detach().cpu().numpy()[0][0])
                     gender = np.argmax(model_output[2].detach().cpu().numpy())
-    
-                # Create temporary segment file
+
                 temp_segment_path = os.path.join(
                     chunks_dir, 
                     f"temp_segment_{chunk_idx//chunk_size}_{speaker_idx}.wav"
@@ -333,15 +312,13 @@ def process_large_audio(
                 sf.write(temp_segment_path, speaker_segment, sr)
                 
                 try:
-                    # Extract emotion
+                  
                     speaker_segment_audio, _ = librosa.load(temp_segment_path, sr=16000)
                     emotion = extract_emotion(speaker_segment_audio)
-                    
-                    # Get transcription and process NER
+              
                     transcription = whisper_model.transcribe(temp_segment_path)["text"]
                     ner_text, ner_entities = process_ner(transcription)
-                    
-                    # Create segment object
+             
                     segment = AudioSegment(
                         start_time=start_time,
                         end_time=end_time,
@@ -353,8 +330,7 @@ def process_large_audio(
                         chunk_filename=chunk_filename,
                         ner_tags=ner_entities
                     )
-                    
-                    # Add to all_data for CSV
+
                     all_data.append({
                         'Start Time': start_time,
                         'End Time': end_time,
@@ -368,7 +344,7 @@ def process_large_audio(
                         'Audio File Path': chunk_filename
                     })
                     
-                    # Add to chunk_data for JSON
+                   
                     relative_path = os.path.join("audio_chunks", base_filename, chunk_filename)
                     chunk_data[chunk_filename].segments.append(segment)
                     chunk_data[chunk_filename].filepath = relative_path
@@ -390,15 +366,15 @@ def process_large_audio(
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
     
-    # Save results only if we have processed data
+   
     if all_data:
-        # Save CSV
+      
         df = pd.DataFrame(all_data)
         csv_path = os.path.join(results_dir, f"{base_filename}_processed_data.csv")
         df.to_csv(csv_path, index=False)
         print(f"Saved CSV to: {csv_path}")
         
-        # Save JSON
+  
         chunk_texts = [
             {
                 "audio_filepath": data.filepath,
@@ -415,11 +391,8 @@ def process_large_audio(
     return df, chunk_texts
 
 if __name__ == "__main__":
-    # Navigate up one level to workspace_himanshu and then into Data_store/converted_audio
     download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "downloads")
-    download_dir = os.path.abspath(download_dir)  # Get absolute path
-    
-    # Create output directory
+    download_dir = os.path.abspath(download_dir) 
     output_dir = os.path.abspath("output")
     os.makedirs(output_dir, exist_ok=True)
     
@@ -428,17 +401,12 @@ if __name__ == "__main__":
     
     audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg']
     
-    if not os.path.exists(download_dir):
-        raise FileNotFoundError(f"Directory not found: {download_dir}")
     
     for filename in os.listdir(download_dir):
         audio_path = os.path.join(download_dir, filename)
         
         if os.path.isfile(audio_path) and any(filename.lower().endswith(ext) for ext in audio_extensions):
-            try:
-                print(f"\nProcessing audio file: {filename}")
-                df, chunk_texts = process_large_audio(audio_path, output_base_dir=output_dir)
-                print(f"Successfully processed {filename}")
-            except Exception as e:
-                print(f"Error processing {filename}: {str(e)}")
-                continue
+            print(f"\nProcessing audio file: {filename}")
+            df, chunk_texts = process_large_audio(audio_path, output_base_dir=output_dir)
+            print(f"Successfully processed {filename}")
+       

@@ -146,7 +146,7 @@ def convert_mp4_to_wav(mp4_path: str) -> str:
 
     file_ext = os.path.splitext(mp4_path)[1].lower()
     
-    if file_ext == '.mp4':
+    if file_ext == '.mp4' or file_ext == '.webm':
      
         output_dir = "./converted_audio"
         os.makedirs(output_dir, exist_ok=True)
@@ -390,7 +390,7 @@ def process_large_audio(
     return df, chunk_texts
 
 if __name__ == "__main__":
-    download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "converted_audio")
+    download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "yt_videos")
     download_dir = os.path.abspath(download_dir) 
     output_dir = os.path.abspath("output")
     os.makedirs(output_dir, exist_ok=True)
@@ -398,7 +398,7 @@ if __name__ == "__main__":
     print(f"Processing files from: {download_dir}")
     print(f"Saving output to: {output_dir}")
     
-    audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg']
+    audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg','.mp4','.webm']
     
     
     for filename in os.listdir(download_dir):

@@ -226,11 +226,21 @@ class ChunkData:
 
     @staticmethod
     def get_age_bucket(age: float) -> str:
-        if age < 18: return "0_18"
-        elif age < 30: return "18_30"
-        elif age < 45: return "30_45"
-        elif age < 60: return "45_60"
-        else: return "60plus"
+        actual_age: float = round(age*100, 2)
+    
+    
+        age_brackets: List[tuple[float, str]] = [
+            (18, "0_18"),
+            (30, "18_30"),
+            (45, "30_45"),
+            (60, "45_60"),
+            (float('inf'), "60PLUS")
+        ]
+        
+        for threshold, bracket in age_brackets:
+            if actual_age < threshold:
+                return bracket
+        return "60PLUS"
 
 def create_output_directories(base_path: str) -> Tuple[str, str]:
     chunks_dir = os.path.join(base_path, "audio_chunks")

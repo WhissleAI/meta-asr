@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import moviepy as mp
 import torch.nn as nn
+from tqdm import tqdm
 import soundfile as sf
 from pathlib import Path
 from dotenv import load_dotenv
@@ -15,30 +16,10 @@ from pyannote.audio import Pipeline
 from collections import defaultdict
 from flair.models import SequenceTagger
 from dataclasses import dataclass, field
+from torch.utils.data import Dataset, DataLoader
 from typing import Dict, List, Optional, Tuple, Any
-from convert_mp4_mp3 import MP4AudioChunkConverter
 from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC, Wav2Vec2PreTrainedModel, Wav2Vec2Model
-import os
-import json
-import torch
-import librosa
-import numpy as np
-import pandas as pd
-import moviepy as mp
-import torch.nn as nn
-import soundfile as sf
-from tqdm import tqdm
-from pathlib import Path
-from dotenv import load_dotenv
-from whisper import load_model
-from flair.data import Sentence
-from pyannote.audio import Pipeline
-from collections import defaultdict
-from flair.models import SequenceTagger
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Any
-from torch.utils.data import Dataset, DataLoader
 load_dotenv()
 
 class ModelHead(nn.Module):

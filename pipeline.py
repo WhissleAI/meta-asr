@@ -265,10 +265,8 @@ class AudioBatchDataset(Dataset):
         return self.segments[idx]
 
 def collate_fn(batch):
-    # Find max length for padding
+
     max_len = max(len(seg) for seg in batch)
-    
-    # Pad all segments to max length
     padded_batch = []
     for seg in batch:
         if len(seg) < max_len:
@@ -281,7 +279,7 @@ def collate_fn(batch):
     return torch.FloatTensor(padded_batch)
 
 def process_batch(batch: torch.Tensor, model: AgeGenderModel, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
-    with torch.cuda.amp.autocast():  # Enable mixed precision
+    with torch.cuda.amp.autocast(): 
         with torch.no_grad():
             batch = batch.to(device)
             _, age_logits, gender_logits = model(batch)
@@ -322,7 +320,7 @@ def process_large_audio(
     os.makedirs(chunks_dir, exist_ok=True)
     os.makedirs(results_dir, exist_ok=True)
     
-    # Enable CUDA optimizations
+  
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
     
@@ -359,8 +357,7 @@ def process_large_audio(
                 (turn.start, turn.end, speaker)
                 for turn, _, speaker in diarization.itertracks(yield_label=True)
             ]
-            
-            # Collect all speaker segments for batch processing
+        
             speaker_segments = []
             segment_metadata = []
             
@@ -375,7 +372,6 @@ def process_large_audio(
                 speaker_segments.append(speaker_segment)
                 segment_metadata.append((start_time, end_time, speaker))
             
-            # Batch process speaker segments
             if speaker_segments:
                 age_gender_results = process_speaker_segments(
                     speaker_segments, 
@@ -383,7 +379,6 @@ def process_large_audio(
                     batch_size=batch_size
                 )
                 
-                # Process each segment's results
                 for (start_time, end_time, speaker), (age, gender) in zip(
                     segment_metadata, age_gender_results
                 ):
@@ -445,8 +440,7 @@ def process_large_audio(
             del chunk
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-    
-    # Save results
+
     if all_data:
         df = pd.DataFrame(all_data)
         csv_path = os.path.join(results_dir, f"{base_filename}_processed_data.csv")
@@ -472,9 +466,8 @@ if __name__ == "__main__":
     output_dir = os.path.abspath("output")
     os.makedirs(output_dir, exist_ok=True)
     
-    # Calculate optimal batch size based on GPU memory
-    gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)  # Convert to GB
-    batch_size = max(1, int(gpu_memory / 3))  # Estimate 3GB per sample
+    gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)  
+    batch_size = max(1, int(gpu_memory / 3)) 
     print(f"Using batch size of {batch_size} for {gpu_memory:.1f}GB GPU")
     
     print(f"Processing files from: {download_dir}")

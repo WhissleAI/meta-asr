@@ -52,8 +52,8 @@ This repository contains a set of tools for processing audio files, including fo
 ## 📂 **Data Flow**
 1. **mp4_to_wav.py** → Converts `.mp4` to `.mp3`.
 2. **audioChunker.py** → Chunks `.mp3` files.
-3. **pipeline.py** → Processes chunked audio (segmentation, optional transcription).
-4. **audio_processing_pipeline.py** → Applies NER and audio classification.
+3. **pipeline.py** → Processes chunked audio (segmentation,NER annotation ,Speaker segmentation, transcription).
+4. **audio_processing_pipeline.py(still working on this)** → Applies NER and audio classification(emotion and age prediction).
 5. **Final Output:** Annotated JSON files.
 
 ## 🛠️ **Setup Instructions**

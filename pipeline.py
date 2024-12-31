@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import moviepy as mp
 import torch.nn as nn
-from tqdm import tqdm
 import soundfile as sf
 from pathlib import Path
 from dotenv import load_dotenv
@@ -16,7 +15,6 @@ from pyannote.audio import Pipeline
 from collections import defaultdict
 from flair.models import SequenceTagger
 from dataclasses import dataclass, field
-from torch.utils.data import Dataset, DataLoader
 from typing import Dict, List, Optional, Tuple, Any
 from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC, Wav2Vec2PreTrainedModel, Wav2Vec2Model
@@ -253,76 +251,16 @@ def create_output_directories(base_path: str) -> Tuple[str, str]:
     return chunks_dir, results_dir
 
 
-class AudioBatchDataset(Dataset):
-    def __init__(self, segments: List[np.ndarray], sr: int = 16000):
-        self.segments = segments
-        self.sr = sr
-        
-    def __len__(self):
-        return len(self.segments)
-        
-    def __getitem__(self, idx):
-        return self.segments[idx]
-
-def collate_fn(batch):
-
-    max_len = max(len(seg) for seg in batch)
-    padded_batch = []
-    for seg in batch:
-        if len(seg) < max_len:
-            padding = np.zeros(max_len - len(seg))
-            padded_seg = np.concatenate([seg, padding])
-        else:
-            padded_seg = seg
-        padded_batch.append(padded_seg)
-        
-    return torch.FloatTensor(padded_batch)
-
-def process_batch(batch: torch.Tensor, model: AgeGenderModel, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
-    with torch.cuda.amp.autocast(): 
-        with torch.no_grad():
-            batch = batch.to(device)
-            _, age_logits, gender_logits = model(batch)
-            
-    return age_logits.cpu().numpy(), gender_logits.cpu().numpy()
-
-def process_speaker_segments(
-    segments: List[np.ndarray], 
-    model: AgeGenderModel,
-    batch_size: int = 8
-) -> List[Tuple[float, int]]:
-    dataset = AudioBatchDataset(segments)
-    dataloader = DataLoader(
-        dataset, 
-        batch_size=batch_size,
-        collate_fn=collate_fn,
-        num_workers=4
-    )
-    
-    results = []
-    for batch in dataloader:
-        age_logits, gender_logits = process_batch(batch, model, device)
-        
-        for age, gender in zip(age_logits, gender_logits):
-            results.append((float(age[0]), int(np.argmax(gender))))
-            
-    return results
-
 def process_large_audio(
     audio_path: str, 
     chunk_duration: float = 20.0,
-    output_base_dir: str = "output",
-    batch_size: int = 8  # Added batch size parameter
+    output_base_dir: str = "output"
 ) -> Tuple[pd.DataFrame, List[Dict[str, str]]]:
     chunks_dir = os.path.abspath(os.path.join(output_base_dir, "audio_chunks"))
     results_dir = os.path.abspath(os.path.join(output_base_dir, "results"))
     
     os.makedirs(chunks_dir, exist_ok=True)
     os.makedirs(results_dir, exist_ok=True)
-    
-  
-    if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True
     
     processed_audio_path = convert_mp4_to_wav(audio_path)
     signal, sr = librosa.load(processed_audio_path, sr=16000)
@@ -333,8 +271,7 @@ def process_large_audio(
 
     base_filename = os.path.splitext(os.path.basename(audio_path))[0]
     
-    # Process chunks with progress bar
-    for chunk_idx in tqdm(range(0, len(signal), chunk_size), desc="Processing chunks"):
+    for chunk_idx in range(0, len(signal), chunk_size):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -351,86 +288,82 @@ def process_large_audio(
             sf.write(chunk_path, chunk, sr)
         
         try:
-            # Get speaker diarization
             diarization = pipeline({'audio': chunk_path})
             speaker_changes = [
                 (turn.start, turn.end, speaker)
                 for turn, _, speaker in diarization.itertracks(yield_label=True)
             ]
-        
-            speaker_segments = []
-            segment_metadata = []
             
-            for start_time, end_time, speaker in speaker_changes:
+            for speaker_idx, (start_time, end_time, speaker) in enumerate(speaker_changes):
                 start_sample = int(start_time * sr)
                 end_sample = int(end_time * sr)
+    
                 speaker_segment = chunk[start_sample:end_sample]
                 
                 if len(speaker_segment) / sr < 1.5:
                     continue
-                
-                speaker_segments.append(speaker_segment)
-                segment_metadata.append((start_time, end_time, speaker))
-            
-            if speaker_segments:
-                age_gender_results = process_speaker_segments(
-                    speaker_segments, 
-                    model, 
-                    batch_size=batch_size
-                )
-                
-                for (start_time, end_time, speaker), (age, gender) in zip(
-                    segment_metadata, age_gender_results
-                ):
-                    speaker_segment = speaker_segments[segment_metadata.index((start_time, end_time, speaker))]
-                    temp_segment_path = os.path.join(
-                        chunks_dir, 
-                        f"temp_segment_{chunk_idx//chunk_size}_{segment_metadata.index((start_time, end_time, speaker))}.wav"
-                    )
-                    sf.write(temp_segment_path, speaker_segment, sr)
                     
-                    try:
-                        speaker_segment_audio, _ = librosa.load(temp_segment_path, sr=16000)
-                        emotion = extract_emotion(speaker_segment_audio)
-                        
-                        transcription = whisper_model.transcribe(temp_segment_path)["text"]
-                        ner_text, ner_entities = process_ner(transcription)
-                        segment = AudioSegment(
-                            start_time=start_time,
-                            end_time=end_time,
-                            speaker=speaker,
-                            age=age,
-                            gender=gender,
-                            transcription=transcription,
-                            emotion=emotion,
-                            chunk_filename=chunk_filename,
-                            ner_tags=ner_entities
-                        )
+                y = processor(speaker_segment, sampling_rate=sr)
+                y = y['input_values'][0]
+                y = y.reshape(1, -1)
+                y = torch.from_numpy(y).to(device)
+  
+                with torch.no_grad():
+                    model_output = model(y)
+                    age = float(model_output[1].detach().cpu().numpy()[0][0])
+                    gender = np.argmax(model_output[2].detach().cpu().numpy())
 
-                        all_data.append({
-                            'Start Time': start_time,
-                            'End Time': end_time,
-                            'Speaker': speaker,
-                            'Age': age,
-                            'Gender': gender,
-                            'Transcription': transcription,
-                            'NER_Tagged_Text': ner_text,
-                            'NER_Entities': json.dumps(ner_entities),
-                            'emotion': emotion,
-                            'Audio File Path': chunk_filename
-                        })
-                        
-                        relative_path = os.path.join("audio_chunks", base_filename, chunk_filename)
-                        chunk_data[chunk_filename].segments.append(segment)
-                        chunk_data[chunk_filename].filepath = relative_path
-                        
-                    except Exception as e:
-                        print(f"Error processing segment in chunk {chunk_filename}: {str(e)}")
-                        continue
+                temp_segment_path = os.path.join(
+                    chunks_dir, 
+                    f"temp_segment_{chunk_idx//chunk_size}_{speaker_idx}.wav"
+                )
+                sf.write(temp_segment_path, speaker_segment, sr)
+                
+                try:
+                  
+                    speaker_segment_audio, _ = librosa.load(temp_segment_path, sr=16000)
+                    emotion = extract_emotion(speaker_segment_audio)
+              
+                    transcription = whisper_model.transcribe(temp_segment_path)["text"]
+                    ner_text, ner_entities = process_ner(transcription)
+             
+                    segment = AudioSegment(
+                        start_time=start_time,
+                        end_time=end_time,
+                        speaker=speaker,
+                        age=float(age),
+                        gender=int(gender),
+                        transcription=transcription,
+                        emotion=emotion,
+                        chunk_filename=chunk_filename,
+                        ner_tags=ner_entities
+                    )
+
+                    all_data.append({
+                        'Start Time': start_time,
+                        'End Time': end_time,
+                        'Speaker': speaker,
+                        'Age': float(age),
+                        'Gender': int(gender),
+                        'Transcription': transcription,
+                        'NER_Tagged_Text': ner_text,
+                        'NER_Entities': json.dumps(ner_entities),
+                        'emotion': emotion,
+                        'Audio File Path': chunk_filename
+                    })
                     
-                    finally:
-                        if os.path.exists(temp_segment_path):
-                            os.remove(temp_segment_path)
+                   
+                    relative_path = os.path.join("audio_chunks", base_filename, chunk_filename)
+                    chunk_data[chunk_filename].segments.append(segment)
+                    chunk_data[chunk_filename].filepath = relative_path
+                    
+                except Exception as e:
+                    print(f"Error processing segment in chunk {chunk_filename}: {str(e)}")
+                    continue
+                
+                finally:
+                    if os.path.exists(temp_segment_path):
+                        os.remove(temp_segment_path)
         
         except Exception as e:
             print(f"Error processing chunk {chunk_filename}: {str(e)}")
@@ -440,12 +373,16 @@ def process_large_audio(
             del chunk
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-
+    
+   
     if all_data:
+      
         df = pd.DataFrame(all_data)
         csv_path = os.path.join(results_dir, f"{base_filename}_processed_data.csv")
         df.to_csv(csv_path, index=False)
+        print(f"Saved CSV to: {csv_path}")
         
+  
         chunk_texts = [
             {
                 "audio_filepath": data.filepath,
@@ -457,32 +394,27 @@ def process_large_audio(
         json_path = os.path.join(results_dir, f"{base_filename}_audio_text_pairs.json")
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(chunk_texts, f, indent=2, ensure_ascii=False)
+        print(f"Saved JSON to: {json_path}")
     
     return df, chunk_texts
 
 if __name__ == "__main__":
-    download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "travel_blog")
-    download_dir = os.path.abspath(download_dir)
+    download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "nnnn")
+    download_dir = os.path.abspath(download_dir) 
     output_dir = os.path.abspath("output")
     os.makedirs(output_dir, exist_ok=True)
-    
-    gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)  
-    batch_size = max(1, int(gpu_memory / 3)) 
-    print(f"Using batch size of {batch_size} for {gpu_memory:.1f}GB GPU")
     
     print(f"Processing files from: {download_dir}")
     print(f"Saving output to: {output_dir}")
     
-    audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg', '.mp4', '.webm']
+    audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg','.mp4','.webm']
+    
     
     for filename in os.listdir(download_dir):
         audio_path = os.path.join(download_dir, filename)
         
         if os.path.isfile(audio_path) and any(filename.lower().endswith(ext) for ext in audio_extensions):
             print(f"\nProcessing audio file: {filename}")
-            df, chunk_texts = process_large_audio(
-                audio_path, 
-                output_base_dir=output_dir,
-                batch_size=batch_size
-            )
+            df, chunk_texts = process_large_audio(audio_path, output_base_dir=output_dir)
             print(f"Successfully processed {filename}")
+       

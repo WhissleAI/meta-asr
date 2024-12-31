@@ -48,7 +48,12 @@ This repository contains a set of tools for processing audio files, including fo
     "text": "annotated_text"
   }
   ```
-
+## 5 . **extract_data_from_cloud.py**
+- **Purpose:** To download the data from the  gcloud.
+## 6. **age_gender_classify.py**
+**Purpose:** streamline pipeline to predict the age and gender from the audio.
+## 7. **csv_to_json.py**
+**Purpose:** to convert the csv data to the required json format.
 ## 📂 **Data Flow**
 1. **mp4_to_wav.py** → Converts `.mp4` to `.mp3`.
 2. **audioChunker.py** → Chunks `.mp3` files.

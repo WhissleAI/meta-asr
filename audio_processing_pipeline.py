@@ -152,7 +152,6 @@ class ChunkData:
         return "60PLUS"
 
 def process_single_directory(audio_dir: str, output_dir: str) -> List[Dict[str, str]]:
-   
     audio_files = [f for f in os.listdir(audio_dir) if f.lower().endswith('.flac')]
     if not audio_files:
         print(f"No .flac files found in {audio_dir}")
@@ -216,9 +215,8 @@ def process_single_directory(audio_dir: str, output_dir: str) -> List[Dict[str, 
                 ner_tags=ner_entities
             )
             
-            relative_path = os.path.join(os.path.basename(os.path.dirname(audio_dir)), 
-                                       os.path.basename(audio_dir), 
-                                       audio_file)
+            # Update relative path to include all parent directories
+            relative_path = os.path.relpath(audio_path, os.path.dirname(os.path.dirname(os.path.dirname(audio_dir))))
             chunk_data[audio_file].segments.append(segment_data)
             chunk_data[audio_file].filepath = relative_path
             
@@ -238,19 +236,29 @@ def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "ou
     os.makedirs(output_dir, exist_ok=True)
     all_results = []
     
-    subdirs = [d for d in os.listdir(base_dir) 
-              if os.path.isdir(os.path.join(base_dir, d))]
+    # First level directories (e.g., 1272, 174, etc.)
+    main_dirs = [d for d in os.listdir(base_dir) 
+                if os.path.isdir(os.path.join(base_dir, d))]
     
-    print(f"Found {len(subdirs)} subdirectories to process")
+    print(f"Found {len(main_dirs)} main directories to process")
     
-    for subdir in sorted(subdirs):
-        subdir_path = os.path.join(base_dir, subdir)
-        print(f"\nProcessing directory: {subdir_path}")
+    for main_dir in sorted(main_dirs):
+        main_dir_path = os.path.join(base_dir, main_dir)
         
-        results = process_single_directory(subdir_path, output_dir)
-        if results:
-            all_results.extend(results)
-            print(f"Added {len(results)} entries from {subdir}")
+        # Second level directories (e.g., 128104, 135031, etc.)
+        sub_dirs = [d for d in os.listdir(main_dir_path)
+                   if os.path.isdir(os.path.join(main_dir_path, d))]
+        
+        print(f"\nProcessing main directory: {main_dir} with {len(sub_dirs)} subdirectories")
+        
+        for sub_dir in sorted(sub_dirs):
+            final_dir_path = os.path.join(main_dir_path, sub_dir)
+            print(f"\nProcessing subdirectory: {final_dir_path}")
+            
+            results = process_single_directory(final_dir_path, output_dir)
+            if results:
+                all_results.extend(results)
+                print(f"Added {len(results)} entries from {sub_dir}")
 
     if all_results:
         json_path = os.path.join(output_dir, "audio_text_pairs.json")
@@ -261,8 +269,7 @@ def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "ou
         print("\nNo results were generated")
 
 if __name__ == "__main__":
-
-    base_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "84")
+    base_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "dev-clean")
     base_dir = os.path.abspath(base_dir)
     output_dir = "output"
     

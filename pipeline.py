@@ -271,135 +271,139 @@ def process_large_audio(
 
     base_filename = os.path.splitext(os.path.basename(audio_path))[0]
     
-    for chunk_idx in range(0, len(signal), chunk_size):
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        end = min(chunk_idx + chunk_size, len(signal))
-        chunk = signal[chunk_idx:end]
-
-        if len(chunk) / sr < 1.0:
-            continue
-            
-        chunk_filename = f"{base_filename}_chunk_{chunk_idx//chunk_size}.wav"
-        chunk_path = os.path.join(chunks_dir, chunk_filename)
-
-        if not os.path.exists(chunk_path):
-            sf.write(chunk_path, chunk, sr)
-        
-        try:
-            diarization = pipeline({'audio': chunk_path})
-            speaker_changes = [
-                (turn.start, turn.end, speaker)
-                for turn, _, speaker in diarization.itertracks(yield_label=True)
-            ]
-            
-            for speaker_idx, (start_time, end_time, speaker) in enumerate(speaker_changes):
-                start_sample = int(start_time * sr)
-                end_sample = int(end_time * sr)
-    
-                speaker_segment = chunk[start_sample:end_sample]
-                
-                if len(speaker_segment) / sr < 1.5:
-                    continue
-                    
-                y = processor(speaker_segment, sampling_rate=sr)
-                y = y['input_values'][0]
-                y = y.reshape(1, -1)
-                y = torch.from_numpy(y).to(device)
-  
-                with torch.no_grad():
-                    model_output = model(y)
-                    age = float(model_output[1].detach().cpu().numpy()[0][0])
-                    gender = np.argmax(model_output[2].detach().cpu().numpy())
-
-                temp_segment_path = os.path.join(
-                    chunks_dir, 
-                    f"temp_segment_{chunk_idx//chunk_size}_{speaker_idx}.wav"
-                )
-                sf.write(temp_segment_path, speaker_segment, sr)
-                
-                try:
-                  
-                    speaker_segment_audio, _ = librosa.load(temp_segment_path, sr=16000)
-                    emotion = extract_emotion(speaker_segment_audio)
-              
-                    transcription = whisper_model.transcribe(temp_segment_path)["text"]
-                    ner_text, ner_entities = process_ner(transcription)
-             
-                    segment = AudioSegment(
-                        start_time=start_time,
-                        end_time=end_time,
-                        speaker=speaker,
-                        age=float(age),
-                        gender=int(gender),
-                        transcription=transcription,
-                        emotion=emotion,
-                        chunk_filename=chunk_filename,
-                        ner_tags=ner_entities
-                    )
-
-                    all_data.append({
-                        'Start Time': start_time,
-                        'End Time': end_time,
-                        'Speaker': speaker,
-                        'Age': float(age),
-                        'Gender': int(gender),
-                        'Transcription': transcription,
-                        'NER_Tagged_Text': ner_text,
-                        'NER_Entities': json.dumps(ner_entities),
-                        'emotion': emotion,
-                        'Audio File Path': chunk_filename
-                    })
-                    
-                   
-                    relative_path = os.path.join("audio_chunks", base_filename, chunk_filename)
-                    chunk_data[chunk_filename].segments.append(segment)
-                    chunk_data[chunk_filename].filepath = relative_path
-                    
-                except Exception as e:
-                    print(f"Error processing segment in chunk {chunk_filename}: {str(e)}")
-                    continue
-                
-                finally:
-                    if os.path.exists(temp_segment_path):
-                        os.remove(temp_segment_path)
-        
-        except Exception as e:
-            print(f"Error processing chunk {chunk_filename}: {str(e)}")
-            continue
-            
-        finally:
-            del chunk
+    try:
+        for chunk_idx in range(0, len(signal), chunk_size):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-    
-   
-    if all_data:
+
+            end = min(chunk_idx + chunk_size, len(signal))
+            chunk = signal[chunk_idx:end]
+
+            if len(chunk) / sr < 1.0:
+                continue
+                
+            chunk_filename = f"{base_filename}_chunk_{chunk_idx//chunk_size}.wav"
+            chunk_path = os.path.join(chunks_dir, chunk_filename)
+
+            if not os.path.exists(chunk_path):
+                sf.write(chunk_path, chunk, sr)
+            
+            try:
+                diarization = pipeline({'audio': chunk_path})
+                speaker_changes = [
+                    (turn.start, turn.end, speaker)
+                    for turn, _, speaker in diarization.itertracks(yield_label=True)
+                ]
+                
+                for speaker_idx, (start_time, end_time, speaker) in enumerate(speaker_changes):
+                    start_sample = int(start_time * sr)
+                    end_sample = int(end_time * sr)
+        
+                    speaker_segment = chunk[start_sample:end_sample]
+                    
+                    if len(speaker_segment) / sr < 1.5:
+                        continue
+                        
+                    y = processor(speaker_segment, sampling_rate=sr)
+                    y = y['input_values'][0]
+                    y = y.reshape(1, -1)
+                    y = torch.from_numpy(y).to(device)
       
-        df = pd.DataFrame(all_data)
-        csv_path = os.path.join(results_dir, f"{base_filename}_processed_data.csv")
-        df.to_csv(csv_path, index=False)
-        print(f"Saved CSV to: {csv_path}")
+                    with torch.no_grad():
+                        model_output = model(y)
+                        age = float(model_output[1].detach().cpu().numpy()[0][0])
+                        gender = np.argmax(model_output[2].detach().cpu().numpy())
+
+                    temp_segment_path = os.path.join(
+                        chunks_dir, 
+                        f"temp_segment_{chunk_idx//chunk_size}_{speaker_idx}.wav"
+                    )
+                    sf.write(temp_segment_path, speaker_segment, sr)
+                    
+                    try:
+                        speaker_segment_audio, _ = librosa.load(temp_segment_path, sr=16000)
+                        emotion = extract_emotion(speaker_segment_audio)
+                  
+                        transcription = whisper_model.transcribe(temp_segment_path)["text"]
+                        ner_text, ner_entities = process_ner(transcription)
+                 
+                        segment = AudioSegment(
+                            start_time=start_time,
+                            end_time=end_time,
+                            speaker=speaker,
+                            age=float(age),
+                            gender=int(gender),
+                            transcription=transcription,
+                            emotion=emotion,
+                            chunk_filename=chunk_filename,
+                            ner_tags=ner_entities
+                        )
+
+                        all_data.append({
+                            'Start Time': start_time,
+                            'End Time': end_time,
+                            'Speaker': speaker,
+                            'Age': float(age),
+                            'Gender': int(gender),
+                            'Transcription': transcription,
+                            'NER_Tagged_Text': ner_text,
+                            'NER_Entities': json.dumps(ner_entities),
+                            'emotion': emotion,
+                            'Audio File Path': chunk_filename
+                        })
+                        
+                        relative_path = os.path.join("audio_chunks", base_filename, chunk_filename)
+                        chunk_data[chunk_filename].segments.append(segment)
+                        chunk_data[chunk_filename].filepath = relative_path
+                        
+                    except Exception as e:
+                        print(f"Error processing segment in chunk {chunk_filename}: {str(e)}")
+                        continue
+                    
+                    finally:
+                        if os.path.exists(temp_segment_path):
+                            os.remove(temp_segment_path)
+            
+            except Exception as e:
+                print(f"Error processing chunk {chunk_filename}: {str(e)}")
+                continue
+                
+            finally:
+                del chunk
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
         
-  
-        chunk_texts = [
-            {
-                "audio_filepath": data.filepath,
-                "text": data.get_formatted_text()
-            }
-            for data in chunk_data.values()
-        ]
+        # Create DataFrame and save results if data was processed
+        if all_data:
+            df = pd.DataFrame(all_data)
+            csv_path = os.path.join(results_dir, f"{base_filename}_processed_data.csv")
+            df.to_csv(csv_path, index=False)
+            print(f"Saved CSV to: {csv_path}")
+            
+            chunk_texts = [
+                {
+                    "audio_filepath": data.filepath,
+                    "text": data.get_formatted_text()
+                }
+                for data in chunk_data.values()
+            ]
+            
+            json_path = os.path.join(results_dir, f"{base_filename}_audio_text_pairs.json")
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(chunk_texts, f, indent=2, ensure_ascii=False)
+            print(f"Saved JSON to: {json_path}")
+            
+            return df, chunk_texts
         
-        json_path = os.path.join(results_dir, f"{base_filename}_audio_text_pairs.json")
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(chunk_texts, f, indent=2, ensure_ascii=False)
-        print(f"Saved JSON to: {json_path}")
-    
-    return df, chunk_texts
+        # Return empty DataFrame and list if no data was processed
+        return pd.DataFrame(), []
+        
+    except Exception as e:
+        print(f"Error processing audio file {audio_path}: {str(e)}")
+        return pd.DataFrame(), []
 
 if __name__ == "__main__":
-    download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "nnnn")
+    download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "hima")
     download_dir = os.path.abspath(download_dir) 
     output_dir = os.path.abspath("output")
     os.makedirs(output_dir, exist_ok=True)

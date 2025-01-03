@@ -269,7 +269,7 @@ def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "ou
         print("\nNo results were generated")
 
 if __name__ == "__main__":
-    base_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "dev-clean")
+    base_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "train-clean-100")
     base_dir = os.path.abspath(base_dir)
     output_dir = "output"
     

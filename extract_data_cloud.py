@@ -5,13 +5,12 @@ import os
 client = storage.Client()
 
 # Specify your bucket name
-bucket_name = "stream2action-audio"
+bucket_name = "avspeech-data"
 
 # Create a local directory to store downloaded files
-download_path = "./stream2action_videos"
+download_path = "./avspeech-data"
 os.makedirs(download_path, exist_ok=True)
 
-# Access the bucket
 bucket = client.get_bucket(bucket_name)
 
 # List all blobs in the bucket
@@ -19,8 +18,6 @@ blobs = bucket.list_blobs()
 
 # Iterate through the blobs and download videos
 for blob in blobs:
-    # Check if the blob is a video file (adjust extension check as needed)
-    if blob.name.endswith(('.mp4', '.avi', '.mov','.wav','.mp3')):
         # Determine local file path
         file_path = os.path.join(download_path, blob.name)
         

@@ -289,6 +289,7 @@ if __name__ == "__main__":
     base_dir = os.path.abspath(base_dir)
     output_dir = "output"
     
+    
     print(f"Processing files from base directory: {base_dir}")
     print(f"Saving output to: {output_dir}")
     

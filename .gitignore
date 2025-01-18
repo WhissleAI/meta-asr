@@ -1,24 +1,15 @@
 .venv
 .env
 test.py
-batch_processing
-output/youtube_segment
-output/speaker_segments3
 __pycache__
 temporary_folder
 converted_audio 
-test_audio/y2mate.com - Boost Up Your English Skills  English Podcast Conversation  Episode 23 .mp3
-multi_spk
-temp
 downloads
 output1
 output
 audio_chunks
-organise-data/download_yt.py
+organise-data
 test2.py
-stream2action_videos
-info.txt
-avspeech-data
 outputs
-audio_chunks_unprocessed
+
 

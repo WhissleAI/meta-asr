@@ -1,62 +1,62 @@
-# import json
-# import os
-# from pathlib import Path
+import json
+import os
+from pathlib import Path
 
-# def clean_text(text):
-#     """Clean text by removing extra spaces and trimming."""
-#     return ' '.join(text.split())
+def clean_text(text):
+    """Clean text by removing extra spaces and trimming."""
+    return ' '.join(text.split())
 
-# def process_json_file(file_path):
-#     """Process a single JSON file and clean all text fields."""
-#     try:
-#         with open(file_path, 'r', encoding='utf-8') as f:
-#             data = json.load(f)
+def process_json_file(file_path):
+    """Process a single JSON file and clean all text fields."""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
         
-#         # Handle both single object and list of objects
-#         if isinstance(data, list):
-#             for item in data:
-#                 if 'text' in item:
-#                     item['text'] = clean_text(item['text'])
-#         else:
-#             if 'text' in data:
-#                 data['text'] = clean_text(data['text'])
+        # Handle both single object and list of objects
+        if isinstance(data, list):
+            for item in data:
+                if 'text' in item:
+                    item['text'] = clean_text(item['text'])
+        else:
+            if 'text' in data:
+                data['text'] = clean_text(data['text'])
         
-#         # Write back to the same file with proper formatting
-#         with open(file_path, 'w', encoding='utf-8') as f:
-#             json.dump(data, f, indent=2, ensure_ascii=False)
+        # Write back to the same file with proper formatting
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
         
-#         return True
-#     except Exception as e:
-#         print(f"Error processing {file_path}: {str(e)}")
-#         return False
+        return True
+    except Exception as e:
+        print(f"Error processing {file_path}: {str(e)}")
+        return False
 
-# def process_folder(folder_path):
-#     """Process all JSON files in the given folder."""
-#     folder = Path(folder_path)
-#     if not folder.exists():
-#         print(f"Folder {folder_path} does not exist!")
-#         return
+def process_folder(folder_path):
+    """Process all JSON files in the given folder."""
+    folder = Path(folder_path)
+    if not folder.exists():
+        print(f"Folder {folder_path} does not exist!")
+        return
     
-#     processed = 0
-#     failed = 0
+    processed = 0
+    failed = 0
     
-#     # Process all JSON files in the folder
-#     for file_path in folder.glob('*.json'):
-#         print(f"Processing {file_path.name}...")
-#         if process_json_file(file_path):
-#             processed += 1
-#         else:
-#             failed += 1
+    # Process all JSON files in the folder
+    for file_path in folder.glob('*.json'):
+        print(f"Processing {file_path.name}...")
+        if process_json_file(file_path):
+            processed += 1
+        else:
+            failed += 1
     
-#     print(f"\nProcessing complete!")
-#     print(f"Successfully processed: {processed} files")
-#     print(f"Failed to process: {failed} files")
+    print(f"\nProcessing complete!")
+    print(f"Successfully processed: {processed} files")
+    print(f"Failed to process: {failed} files")
 
-# # Example usage
-# if __name__ == "__main__":
-#     base_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "youtube_data/data")
-#     base_dir = os.path.abspath(base_dir)
-#     process_folder(base_dir)
+# Example usage
+if __name__ == "__main__":
+    base_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "youtube_data/data")
+    base_dir = os.path.abspath(base_dir)
+    process_folder(base_dir)
 
 
 import json

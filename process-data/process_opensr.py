@@ -285,9 +285,10 @@ def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "ou
         print("\nNo remaining results to save")
 
 if __name__ == "__main__":
-    base_dir = os.path.join(os.path.dirname(__file__), "..", "Data-store", "train-other-500")
-    base_dir = os.path.abspath(base_dir)
-    output_dir = "output"
+    # base_dir = os.path.join(os.path.dirname(__file__), "..", "Data-store", "train-other-500")
+    # base_dir = os.path.abspath(base_dir)
+    base_dir = "/external2/datasets/librespeech/mls_german/train"
+    output_dir = "/Data-store/mls_German"
     
     print(f"Processing files from base directory: {base_dir}")
     print(f"Saving output to: {output_dir}")

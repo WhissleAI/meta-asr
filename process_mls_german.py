@@ -1,12 +1,14 @@
 import os
 import json
 import torch
-import spacy
 import librosa
 import numpy as np
+import soundfile as sf
 from pathlib import Path
 from dotenv import load_dotenv
+from flair.data import Sentence
 from collections import defaultdict
+from flair.models import SequenceTagger
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Any
 from transformers import AutoModelForAudioClassification, AutoFeatureExtractor, Wav2Vec2Processor, Wav2Vec2Model, Wav2Vec2PreTrainedModel
@@ -14,9 +16,10 @@ import torch.nn as nn
 
 load_dotenv()
 
-# Load spaCy model
-nlp = spacy.load('de_core_news_lg')
+def initialize_french_ner():
+    return SequenceTagger.load('flair/ner-german-large')
 
+french_ner = initialize_french_ner()
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
         super().__init__()
@@ -55,38 +58,6 @@ model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
 processor = Wav2Vec2Processor.from_pretrained(model_name)
 model = AgeGenderModel.from_pretrained(model_name).to(device)
 
-def load_transcriptions(trans_file: str) -> Dict[str, str]:
-    transcriptions = {}
-    with open(trans_file, 'r', encoding='utf-8') as f:
-        for line in f:
-            parts = line.strip().split('\t')
-            if len(parts) == 2:
-                # No need to replace '/' with '_' as the IDs already use underscore format
-                file_id = parts[0]
-                transcriptions[file_id] = parts[1]
-    return transcriptions
-
-def process_ner(text: str) -> Tuple[str, List[Dict[str, Any]]]:
-    doc = nlp(text)
-    
-    entities = []
-    formatted_text = text
-    
-    for ent in doc.ents:
-        entity_text = ent.text
-        entity_type = ent.label_
-        replacement = f"NER_{entity_type} {entity_text} END"
-        formatted_text = formatted_text.replace(entity_text, replacement, 1)
-        
-        entities.append({
-            "text": entity_text,
-            "type": entity_type,
-            "start_char": ent.start_char,
-            "end_char": ent.end_char
-        })
-    
-    return formatted_text, entities
-
 def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000) -> str:
     model_name = "superb/hubert-large-superb-er"
         
@@ -123,6 +94,47 @@ class AudioSegment:
     emotion: str
     chunk_filename: str
     ner_tags: List[Dict[str, Any]] = field(default_factory=list)
+
+def process_ner(text: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Process text using French Flair NER model
+    """
+    try:
+        # Create a Flair sentence
+        sentence = Sentence(text)
+        
+        # Run NER prediction
+        french_ner.predict(sentence)
+        
+        entities = []
+        formatted_text = text
+        
+        # Process each entity found by the model
+        for entity in sorted(sentence.get_spans('ner'), key=lambda x: x.start_position, reverse=True):
+            entity_text = entity.text
+            entity_type = entity.tag
+            
+            # Create replacement text
+            replacement = f"NER_{entity_type} {entity_text} END"
+            
+            # Replace the entity in the text
+            start = entity.start_position
+            end = entity.end_position
+            formatted_text = formatted_text[:start] + replacement + formatted_text[end:]
+            
+            # Store entity information
+            entities.append({
+                "text": entity_text,
+                "type": entity_type,
+                "start_position": start,
+                "end_position": end
+            })
+        
+        return formatted_text, entities
+        
+    except Exception as e:
+        print(f"Error in NER processing: {str(e)}")
+        return text, []
 
 @dataclass
 class ChunkData:
@@ -161,199 +173,192 @@ class ChunkData:
                 return bracket
         return "60PLUS"
 
-def process_audio_directory(base_dir: str, transcriptions: Dict[str, str], output_dir: str) -> List[Dict[str, str]]:
-    results = []
-    audio_dir = os.path.join(base_dir, "audio")
+def process_single_directory(audio_dir: str, output_dir: str) -> List[Dict[str, str]]:
+    audio_files = [f for f in os.listdir(audio_dir) if f.lower().endswith('.flac')]
+    if not audio_files:
+        print(f"No .flac files found in {audio_dir}")
+        return []
+        
+    first_audio = audio_files[0]
+    prefix = '-'.join(first_audio.split('-')[:2])
+    trans_file = os.path.join(audio_dir, f"{prefix}.trans.txt")
     
-    # Walk through the directory structure
-    for root, dirs, files in os.walk(audio_dir):
-        for audio_file in files:
-            if not audio_file.endswith('.flac'):
-                continue
-                
-            audio_path = os.path.join(root, audio_file)
-            file_id = os.path.splitext(audio_file)[0]
-            
-            if file_id not in transcriptions:
-                print(f"No transcription found for {file_id}")
-                continue
-            
-            transcription = transcriptions[file_id]
-            print(f"Processing {audio_file}: {transcription}")
-            
-            try:
-                signal, sr = librosa.load(audio_path, sr=16000)
-                
-                if signal is None or len(signal) == 0:
-                    print(f"Failed to load audio file: {audio_path}")
-                    continue
-
-                # Process audio file
-                y = processor(signal, sampling_rate=sr)
-                y = y['input_values'][0]
-                y = y.reshape(1, -1)
-                y = torch.from_numpy(y).to(device)
-
-                with torch.no_grad():
-                    model_output = model(y)
-                    age = float(model_output[1].detach().cpu().numpy()[0][0])
-                    gender = np.argmax(model_output[2].detach().cpu().numpy())
-
-                # Get emotion
-                emotion = extract_emotion(signal)
-                emotion_label = "NEU"  # Default neutral emotion
-                if emotion:
-                    # Map emotion to abbreviated format if needed
-                    emotion_label = emotion.upper()[:3]
-
-                # Process NER
-                ner_text, ner_entities = process_ner(transcription)
-                
-                # Create relative path that matches the desired format
-                relative_path = os.path.relpath(audio_path, base_dir)
-                
-                # Map age to ranges
-                age_actual = round(age * 100, 2)
-                if age_actual < 18:
-                    age_range = "0_18"
-                elif age_actual < 30:
-                    age_range = "18_30"
-                elif age_actual < 45:
-                    age_range = "30_45"
-                elif age_actual < 60:
-                    age_range = "45_60"
-                else:
-                    age_range = "60PLUS"
-
-                # Map gender (assuming 1 is male, others are female)
-                gender_label = "MALE" if gender == 1 else "FEMALE"
-                
-                # Format the text field
-                formatted_text = f"{ner_text} AGE_{age_range} GENDER_{gender_label} EMOTION_{emotion_label}"
-                
-                results.append({
-                    "audio_filepath": relative_path,
-                    "text": formatted_text
-                })
-                
-            except Exception as e:
-                print(f"Error processing {audio_path}: {str(e)}")
-                continue
-
-    return results
-
-def process_dataset(base_dir: str, output_dir: str = "output", batch_size: int = 10) -> None:
-    print(f"\nStarting process_dataset")
-    print(f"Current time: 2025-01-23 14:10:23")
-    print(f"User: zenitsu0509")
-    print(f"Base directory: {base_dir}")
-    print(f"Output directory: {output_dir}")
-    
-    # Create output directory with full path
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-        print(f"✓ Created/verified output directory: {output_dir}")
-    except Exception as e:
-        print(f"Error creating output directory: {str(e)}")
-        return
-
-    # Check write permissions
-    if not os.access(output_dir, os.W_OK):
-        print(f"❌ No write permission for output directory: {output_dir}")
-        return
-    
-    # Verify transcription file
-    trans_file = os.path.join(base_dir, "transcripts.txt")
     if not os.path.exists(trans_file):
-        print(f"❌ Transcription file not found: {trans_file}")
-        return
+        print(f"Transcription file not found: {trans_file}")
+        return []
+   
+    transcriptions = {}
+    with open(trans_file, 'r') as f:
+        for line in f:
+            parts = line.strip().split(maxsplit=1)
+            if len(parts) == 2:
+                file_id, text = parts
+                transcriptions[file_id] = text
+    
+    chunk_data = defaultdict(ChunkData)
+    
+    for audio_file in sorted(audio_files):
+        audio_path = os.path.join(audio_dir, audio_file)
+        file_id = os.path.splitext(audio_file)[0]
         
-    print("\nLoading transcriptions...")
-    transcriptions = load_transcriptions(trans_file)
-    print(f"✓ Loaded {len(transcriptions)} transcriptions")
-    
-    if not transcriptions:
-        print("❌ No transcriptions loaded. Exiting.")
-        return
-    
-    print("\nProcessing audio files...")
-    results = process_audio_directory(base_dir, transcriptions, output_dir)
-    
-    if not results:
-        print("❌ No results generated. Check if audio files were processed correctly.")
-        return
-    
-    print(f"\nPreparing to save {len(results)} results...")
-    
-    # Save in batches of 10
-    for i in range(0, len(results), batch_size):
-        batch = results[i:i + batch_size]
-        batch_num = (i // batch_size) + 1
+        if file_id not in transcriptions:
+            print(f"No transcription found for {audio_file}")
+            continue
         
-        # Create batch filename
-        json_path = os.path.join(output_dir, f"audio_text_pairs_batch_{batch_num}.json")
-        temp_path = json_path + '.tmp'
-        
-        print(f"\nSaving batch {batch_num}/{(len(results) + batch_size - 1) // batch_size}")
-        print(f"Batch size: {len(batch)} entries")
-        print(f"Output file: {json_path}")
+        transcription = transcriptions[file_id]
+        print(f"Processing {audio_file}: {transcription}")
         
         try:
-            # Write to temporary file first
-            with open(temp_path, 'w', encoding='utf-8') as f:
-                json.dump(batch, f, indent=2, ensure_ascii=False)
-            print(f"✓ Written to temporary file: {temp_path}")
+            signal, sr = librosa.load(audio_path, sr=16000)
+            speaker = file_id.split('-')[0]
             
-            # Rename to final filename
-            os.replace(temp_path, json_path)
-            print(f"✓ Successfully saved batch {batch_num} to: {json_path}")
+            y = processor(signal, sampling_rate=sr)
+            y = y['input_values'][0]
+            y = y.reshape(1, -1)
+            y = torch.from_numpy(y).to(device)
+
+            with torch.no_grad():
+                model_output = model(y)
+                age = float(model_output[1].detach().cpu().numpy()[0][0])
+                gender = np.argmax(model_output[2].detach().cpu().numpy())
+
+            emotion = extract_emotion(signal)
+            ner_text, ner_entities = process_ner(transcription)
+            
+            segment_data = AudioSegment(
+                start_time=0,
+                end_time=len(signal) / sr,
+                speaker=speaker,
+                age=age,
+                gender=gender,
+                transcription=transcription,
+                emotion=emotion,
+                chunk_filename=audio_file,
+                ner_tags=ner_entities
+            )
+            
+            # Update relative path to include all parent directories
+            relative_path = os.path.relpath(audio_path, os.path.dirname(os.path.dirname(os.path.dirname(audio_dir))))
+            chunk_data[audio_file].segments.append(segment_data)
+            chunk_data[audio_file].filepath = relative_path
             
         except Exception as e:
-            print(f"❌ Error saving batch {batch_num}: {str(e)}")
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                    print(f"✓ Cleaned up temporary file: {temp_path}")
-                except:
-                    print(f"❌ Failed to clean up temporary file: {temp_path}")
+            print(f"Error processing {audio_file}: {str(e)}")
             continue
     
-    # Save summary file
-    try:
-        summary_path = os.path.join(output_dir, "summary.json")
-        summary = {
-            "total_files": len(results),
-            "total_batches": (len(results) + batch_size - 1) // batch_size,
-            "batch_size": batch_size,
-            "processing_date": "2025-01-23 14:10:23",
-            "user": "zenitsu0509",
-            "base_dir": base_dir,
-            "output_dir": output_dir
+    return [
+        {
+            "audio_filepath": data.filepath,
+            "text": data.get_formatted_text()
         }
+        for data in chunk_data.values()
+    ]
+
+def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "output", batch_size: int = 20000) -> None:
+    os.makedirs(output_dir, exist_ok=True)
+    all_results = []
+    processed_count = 0
+    batch_number = 1
+    
+    # Load transcriptions from transcripts.txt
+    transcriptions = {}
+    transcripts_file = os.path.join(base_dir, "transcripts.txt")
+    print(f"Loading transcriptions from {transcripts_file}")
+    
+    with open(transcripts_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            parts = line.strip().split('\t', 1)
+            if len(parts) == 2:
+                file_id, text = parts
+                transcriptions[file_id] = text
+    
+    # Process audio files from audio1 directory
+    audio_dir = os.path.join(base_dir, "audio1")
+    audio_files = [f for f in os.listdir(audio_dir) if f.lower().endswith('.flac')]
+    
+    print(f"Found {len(audio_files)} audio files to process")
+    
+    def save_batch(results, batch_num):
+        if results:
+            json_path = os.path.join(output_dir, f"audio_text_pairs_batch_{batch_num}.json")
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"\nSaved batch {batch_num} with {len(results)} entries to: {json_path}")
+    
+    for audio_file in sorted(audio_files):
+        audio_path = os.path.join(audio_dir, audio_file)
+        file_id = os.path.splitext(audio_file)[0]
         
-        with open(summary_path, 'w', encoding='utf-8') as f:
-            json.dump(summary, f, indent=2)
-        print(f"\n✓ Saved summary to: {summary_path}")
+        if file_id not in transcriptions:
+            print(f"No transcription found for {audio_file}")
+            continue
         
-    except Exception as e:
-        print(f"❌ Error saving summary: {str(e)}")
+        transcription = transcriptions[file_id]
+        print(f"Processing {audio_file}: {transcription}")
+        
+        try:
+            signal, sr = librosa.load(audio_path, sr=16000)
+            speaker = file_id.split('_')[0]  # Extract speaker ID from filename
+            
+            y = processor(signal, sampling_rate=sr)
+            y = y['input_values'][0]
+            y = y.reshape(1, -1)
+            y = torch.from_numpy(y).to(device)
+
+            with torch.no_grad():
+                model_output = model(y)
+                age = float(model_output[1].detach().cpu().numpy()[0][0])
+                gender = np.argmax(model_output[2].detach().cpu().numpy())
+
+            emotion = extract_emotion(signal)
+            ner_text, ner_entities = process_ner(transcription)
+            
+            segment_data = AudioSegment(
+                start_time=0,
+                end_time=len(signal) / sr,
+                speaker=speaker,
+                age=age,
+                gender=gender,
+                transcription=transcription,
+                emotion=emotion,
+                chunk_filename=audio_file,
+                ner_tags=ner_entities
+            )
+            
+            chunk = ChunkData()
+            chunk.segments.append(segment_data)
+            chunk.filepath = os.path.join("audio1", audio_file)
+            
+            all_results.append({
+                "audio_filepath": chunk.filepath,
+                "text": chunk.get_formatted_text()
+            })
+            
+            processed_count += 1
+            
+            # Check if we've reached the batch size
+            if processed_count >= batch_size:
+                save_batch(all_results, batch_number)
+                batch_number += 1
+                all_results = []
+                processed_count = 0
+                
+        except Exception as e:
+            print(f"Error processing {audio_file}: {str(e)}")
+            continue
+    
+    # Save any remaining results
+    if all_results:
+        save_batch(all_results, batch_number)
+        print(f"\nSaved final batch with {len(all_results)} entries")
+    else:
+        print("\nNo remaining results to save")
 
 if __name__ == "__main__":
-    # Define base directories with absolute paths
     base_dir = "/external2/datasets/librespeech/mls_german/train"
-    output_dir = "/external2/datasets/librespeech/mls_german_output"
+    output_dir = "/external2/datasets/json_jata/german/train"
     
-    print("=" * 50)
-    print("Starting MLS German Processing")
-    print("=" * 50)
-    print(f"Start time: 2025-01-23 14:10:23")
-    print(f"Base directory: {base_dir}")
-    print(f"Output directory: {output_dir}")
+    print(f"Processing files from base directory: {base_dir}")
+    print(f"Saving output to: {output_dir}")
     
-    try:
-        process_dataset(base_dir, output_dir, batch_size=10)
-        print("\n✓ Processing completed successfully.")
-    except Exception as e:
-        print(f"\n❌ Fatal error in process_dataset: {str(e)}")
-    
-    print("=" * 50)
+    process_audio_files_with_transcriptions(base_dir, output_dir)

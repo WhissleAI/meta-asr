@@ -147,7 +147,7 @@ def convert_mp4_to_wav(mp4_path: str) -> str:
     
     if file_ext == '.mp4' or file_ext == '.webm':
      
-        output_dir = "./converted_audio"
+        output_dir = "/external2/datasets/yt_data/yt_audio"
         os.makedirs(output_dir, exist_ok=True)
         
      
@@ -403,9 +403,8 @@ def process_large_audio(
         return pd.DataFrame(), []
 
 if __name__ == "__main__":
-    download_dir = os.path.join(os.path.dirname(__file__), "..", "Data_store", "hima")
-    download_dir = os.path.abspath(download_dir) 
-    output_dir = os.path.abspath("output")
+    download_dir = "/external2/datasets/yt_data"
+    output_dir = "/external2/datasets/yt_data/output"
     os.makedirs(output_dir, exist_ok=True)
     
     print(f"Processing files from: {download_dir}")

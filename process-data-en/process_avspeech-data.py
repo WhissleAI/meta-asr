@@ -157,8 +157,8 @@ def convert_json_format(input_dir: str, output_dir: str, audio_base_dir: str):
         print("\nNo results were generated")
 
 if __name__ == "__main__":
-    input_dir = "/external1/datasets/asr-himanshu/avspeech-data/transcripts1"
-    output_dir = "/external1/datasets/asr-himanshu/avspeech-data_processed"
+    input_dir = "/external1/datasets/asr-himanshu/avspeech-data/transcripts"
+    output_dir = "/external1/datasets/asr-himanshu/avspeech-data_processed2"
     audio_base_dir = "/external1/datasets/asr-himanshu/avspeech-data/audio"
     
     print(f"Processing files from: {input_dir}")

@@ -254,7 +254,7 @@ def process_single_directory(audio_dir: str, output_dir: str) -> List[Dict[str, 
         for data in chunk_data.values()
     ]
 
-def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "output", batch_size: int = 20000) -> None:
+def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "output", batch_size: int = 5000) -> None:
     os.makedirs(output_dir, exist_ok=True)
     all_results = []
     processed_count = 0

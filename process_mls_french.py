@@ -355,8 +355,8 @@ def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "ou
         print("\nNo remaining results to save")
 
 if __name__ == "__main__":
-    base_dir = "/external2/datasets/librespeech/mls_french/train"
-    output_dir = "/external2/datasets/json_jata/french/train"
+    base_dir = "/external2/datasets/librespeech/mls_french/test"
+    output_dir = "/external2/datasets/json_jata/french/test"
     
     print(f"Processing files from base directory: {base_dir}")
     print(f"Saving output to: {output_dir}")

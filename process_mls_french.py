@@ -254,7 +254,7 @@ def process_single_directory(audio_dir: str, output_dir: str) -> List[Dict[str, 
         for data in chunk_data.values()
     ]
 
-def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "output", batch_size: int = 5000) -> None:
+def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "output", batch_size: int = 50000) -> None:
     os.makedirs(output_dir, exist_ok=True)
     all_results = []
     processed_count = 0
@@ -355,8 +355,8 @@ def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "ou
         print("\nNo remaining results to save")
 
 if __name__ == "__main__":
-    base_dir = "/external2/datasets/librespeech/mls_french/test"
-    output_dir = "/external2/datasets/json_jata/french/test"
+    base_dir = "/external2/datasets/librespeech/mls_french/train"
+    output_dir = "/external2/datasets/json_jata/french/train"
     
     print(f"Processing files from base directory: {base_dir}")
     print(f"Saving output to: {output_dir}")

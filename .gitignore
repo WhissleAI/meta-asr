@@ -2,13 +2,5 @@
 .env
 test.py
 __pycache__
-temporary_folder
-converted_audio 
-downloads
-output1
-output
-audio_chunks
 organise-data
 test2.py
-outputs
-erase_data_txt.py

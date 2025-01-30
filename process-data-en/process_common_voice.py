@@ -64,7 +64,7 @@ class AudioPredictor:
     def __init__(self):
         self.processor = Wav2Vec2Processor.from_pretrained("audeering/wav2vec2-large-robust-6-ft-age-gender")
         self.model = AgeGenderModel.from_pretrained("audeering/wav2vec2-large-robust-6-ft-age-gender")
-        self.model.eval()  # Set model to evaluation mode
+        self.model.eval()  
 
     def predict_age_and_gender(self, audio_path):
         """Predict age and gender using the audio file."""
@@ -80,7 +80,7 @@ class AudioPredictor:
                 hidden_states, logits_age, logits_gender = self.model(**inputs)
             
             # Process predictions
-            age = logits_age.squeeze().item() * 100  # Scale age appropriately
+            age = logits_age.squeeze().item() * 100 
             gender_probs = logits_gender.squeeze()
             gender_idx = torch.argmax(gender_probs).item()
             
@@ -89,7 +89,7 @@ class AudioPredictor:
             
         except Exception as e:
             print(f"Error processing audio: {audio_path}\nError: {str(e)}")
-            return 25, "OTHER"  # Default age and gender if error occurs
+            return 25, "OTHER"  
 
 def get_age_bucket(age_text: str) -> str:
     """Map textual age to new age brackets"""

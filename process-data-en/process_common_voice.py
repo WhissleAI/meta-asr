@@ -179,14 +179,10 @@ def process_data(tsv_path: str, output_path: str):
         model="j-hartmann/emotion-english-distilroberta-base", 
         device=0 if torch.cuda.is_available() else -1
     )
-    
-    # Load age-gender model
     print("Loading age-gender model...")
     model = AgeGenderModel.from_pretrained(model_name).to(device)
     model.eval()
     processor = Wav2Vec2Processor.from_pretrained(model_name)
-    
-    # Read TSV file
     print(f"Reading TSV file: {tsv_path}")
     df = pd.read_csv(tsv_path, sep='\t')
     print(f"Found {len(df)} entries in TSV file")
@@ -199,7 +195,7 @@ def process_data(tsv_path: str, output_path: str):
             print(f"Processing row {idx}/{len(df)}")
             
         try:
-            # Get audio path
+
             audio_path = os.path.join("clips", row['path'])
             
             # Use TSV age and gender if available

@@ -67,12 +67,11 @@ class AudioPredictor:
         self.model.eval()  
 
     def predict_age_and_gender(self, audio_path):
-        """Predict age and gender using the audio file."""
+    
         try:
-            # Load audio
+
             audio, sr = librosa.load(audio_path, sr=16000)
-            
-            # Process through wav2vec processor
+          
             inputs = self.processor(audio, sampling_rate=16000, return_tensors="pt", padding=True)
             
             with torch.no_grad():

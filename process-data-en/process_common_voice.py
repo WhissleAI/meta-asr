@@ -206,14 +206,12 @@ def process_data(tsv_path: str, output_path: str):
                 # Load and process audio for age-gender prediction
                 audio, sr = librosa.load(audio_path, sr=16000)
                 predictions = process_func(audio, sr)
-                predicted_age = round(predictions[0][0][0],2)*100  # Get age prediction
-                predicted_gender = predictions[1][0]  # Get gender logits
-                
-                # Convert predictions to required format
+                predicted_age = round(predictions[0][0][0],2)*100 
+                predicted_gender = predictions[1][0] 
+
                 age_bracket = get_age_bucket(predicted_age)
                 gender = "MALE" if np.argmax(predicted_gender) == 1 else "FEMALE"
             
-            # Get sentence from TSV
             sentence_text = row['sentence']
             
             # Process text with NER (inline tags)

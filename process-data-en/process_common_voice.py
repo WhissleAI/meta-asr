@@ -75,11 +75,9 @@ class AudioPredictor:
             # Process through wav2vec processor
             inputs = self.processor(audio, sampling_rate=16000, return_tensors="pt", padding=True)
             
-            # Make prediction
             with torch.no_grad():
                 hidden_states, logits_age, logits_gender = self.model(**inputs)
-            
-            # Process predictions
+           
             age = logits_age.squeeze().item() * 100 
             gender_probs = logits_gender.squeeze()
             gender_idx = torch.argmax(gender_probs).item()
@@ -92,8 +90,6 @@ class AudioPredictor:
             return 25, "OTHER"  
 
 def get_age_bucket(age_text: str) -> str:
-    """Map textual age to new age brackets"""
-    # First convert textual age to approximate numerical age
     age_to_number = {
         'twenties': 25,
         'thirties': 35,
@@ -105,10 +101,10 @@ def get_age_bucket(age_text: str) -> str:
         'nineties': 95
     }
     
-    # Get numerical age
-    age = age_to_number.get(age_text.lower(), 20)  # default to 20 if age not found
     
-    # Use new age brackets
+    age = age_to_number.get(age_text.lower(), 20)  
+    
+ 
     age_brackets = [
         (18, "0_18"),
         (30, "18_30"),
@@ -132,7 +128,7 @@ def map_gender(gender: str) -> str:
     return gender_mapping.get(gender.lower(), 'OTHER')
 
 def predict_emotion(text: str, emotion_classifier) -> str:
-    """Predict emotion from text"""
+   
     try:
         result = emotion_classifier(text)[0]
         emotion = result['label'].upper()
@@ -142,19 +138,16 @@ def predict_emotion(text: str, emotion_classifier) -> str:
         return "EMOTION_NEU"
 
 def process_text_with_ner(text: str, ner_tagger) -> str:
-    """Process text with NER and return formatted string with inline tags"""
+
     sentence = Sentence(text)
     ner_tagger.predict(sentence)
-    
-    # Sort entities by start position to process them in order
+  
     entities = sorted(sentence.get_spans('ner'), key=lambda x: x.start_position)
-    
-    # Create a list of text parts to join later
+
     result_parts = []
     last_end = 0
     
     for entity in entities:
-        # Add text before the entity
         result_parts.append(text[last_end:entity.start_position])
         # Add entity with tags, without underscore between tag and text
         result_parts.append(f"NER_{entity.tag} {entity.text} END")
@@ -166,7 +159,6 @@ def process_text_with_ner(text: str, ner_tagger) -> str:
     return ''.join(result_parts).strip()
 
 def process_data(tsv_path: str, output_path: str):
-    # Initialize models
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
@@ -213,17 +205,14 @@ def process_data(tsv_path: str, output_path: str):
                 gender = "MALE" if np.argmax(predicted_gender) == 1 else "FEMALE"
             
             sentence_text = row['sentence']
-            
-            # Process text with NER (inline tags)
+           
             processed_text = process_text_with_ner(sentence_text, ner_tagger)
             
-            # Predict emotion
+        
             emotion = predict_emotion(sentence_text, emotion_classifier)
             
-            # Format the final text with attributes at the end
             text = f"{processed_text} AGE_{age_bracket} GENDER_{gender} {emotion}"
-            
-            # Create entry
+     
             entry = {
                 "audio_filepath": audio_path,
                 "text": text
@@ -231,8 +220,7 @@ def process_data(tsv_path: str, output_path: str):
             
             output_data.append(entry)
             processed_files += 1
-            
-            # Save intermediate results every 1000 files
+        
             if processed_files % 1000 == 0:
                 print(f"Saving intermediate results... ({processed_files} files processed)")
                 with open(f"{output_path}.temp", 'w', encoding='utf-8') as f:
@@ -244,12 +232,12 @@ def process_data(tsv_path: str, output_path: str):
     print(f"\nProcessing complete!")
     print(f"Total entries processed: {processed_files}")
     
-    # Save final results
+  
     print(f"Saving results to {output_path}")
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(output_data, f, indent=2)
 
-# Usage
+
 tsv_path = "/external2/datasets/cv/cv-corpus-15.0-2023-09-08/en/merged.tsv"
 output_path = "output_cv.json"
 

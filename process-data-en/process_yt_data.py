@@ -372,8 +372,7 @@ def process_large_audio(
                 del chunk
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-        
-        # Create DataFrame and save results if data was processed
+  
         if all_data:
             df = pd.DataFrame(all_data)
             csv_path = os.path.join(results_dir, f"{base_filename}_processed_data.csv")
@@ -395,7 +394,6 @@ def process_large_audio(
             
             return df, chunk_texts
         
-        # Return empty DataFrame and list if no data was processed
         return pd.DataFrame(), []
         
     except Exception as e:

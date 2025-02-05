@@ -2,17 +2,24 @@ import json
 import re
 from typing import List, Dict, Tuple
 import vertexai
+import os
 from vertexai.generative_models import GenerativeModel
-
-def process_jsonl_annotations(input_file: str, output_file: str):
+from dotenv import load_dotenv
+import google.generativeai as genai
+load_dotenv()
+def process_jsonl_annotations(input_file: str, output_file: str, api_key: str):
     """
     Process JSONL file to annotate text while preserving specific tags and replacing NER tags.
     
     Args:
         input_file (str): Path to input JSONL file
         output_file (str): Path to output JSONL file
+        api_key (str): Google API key for Gemini
     """
-    # Define the complete list of entities
+    # Configure the Gemini API
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.0-pro')
+    
     ENTITIES = [
         "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",
         "DATE", "TIME", "DURATION", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "DEADLINE", "DELIVERY_DATE", "DELIVERY_TIME",
@@ -149,7 +156,12 @@ def process_jsonl_annotations(input_file: str, output_file: str):
 
 # Usage example
 if __name__ == "__main__":
+    api_key = os.getenv('GOOGLE_API_KEY')
+    if not api_key:
+        raise ValueError("Please set the GOOGLE_API_KEY environment variable")
+        
     process_jsonl_annotations(
         input_file="/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/decoded_extra.jsonl",
-        output_file="/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/temp.jsonl"
+        output_file="/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/temp.jsonl",
+        api_key=api_key
     )

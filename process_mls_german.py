@@ -100,29 +100,27 @@ def process_ner(text: str) -> Tuple[str, List[Dict[str, Any]]]:
     Process text using French Flair NER model
     """
     try:
-        # Create a Flair sentence
+       
         sentence = Sentence(text)
         
-        # Run NER prediction
+   
         french_ner.predict(sentence)
         
         entities = []
         formatted_text = text
-        
-        # Process each entity found by the model
+     
         for entity in sorted(sentence.get_spans('ner'), key=lambda x: x.start_position, reverse=True):
             entity_text = entity.text
             entity_type = entity.tag
             
-            # Create replacement text
+         
             replacement = f"NER_{entity_type} {entity_text} END"
-            
-            # Replace the entity in the text
+
             start = entity.start_position
             end = entity.end_position
             formatted_text = formatted_text[:start] + replacement + formatted_text[end:]
             
-            # Store entity information
+       
             entities.append({
                 "text": entity_text,
                 "type": entity_type,
@@ -237,7 +235,7 @@ def process_single_directory(audio_dir: str, output_dir: str) -> List[Dict[str, 
                 ner_tags=ner_entities
             )
             
-            # Update relative path to include all parent directories
+            
             relative_path = os.path.relpath(audio_path, os.path.dirname(os.path.dirname(os.path.dirname(audio_dir))))
             chunk_data[audio_file].segments.append(segment_data)
             chunk_data[audio_file].filepath = relative_path
@@ -254,7 +252,7 @@ def process_single_directory(audio_dir: str, output_dir: str) -> List[Dict[str, 
         for data in chunk_data.values()
     ]
 
-def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "output", batch_size: int = 20000) -> None:
+def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "output", batch_size: int = 5000) -> None:
     os.makedirs(output_dir, exist_ok=True)
     all_results = []
     processed_count = 0
@@ -298,7 +296,7 @@ def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "ou
         
         try:
             signal, sr = librosa.load(audio_path, sr=16000)
-            speaker = file_id.split('_')[0]  # Extract speaker ID from filename
+            speaker = file_id.split('_')[0]
             
             y = processor(signal, sampling_rate=sr)
             y = y['input_values'][0]
@@ -336,7 +334,7 @@ def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "ou
             
             processed_count += 1
             
-            # Check if we've reached the batch size
+        
             if processed_count >= batch_size:
                 save_batch(all_results, batch_number)
                 batch_number += 1
@@ -347,7 +345,7 @@ def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "ou
             print(f"Error processing {audio_file}: {str(e)}")
             continue
     
-    # Save any remaining results
+  
     if all_results:
         save_batch(all_results, batch_number)
         print(f"\nSaved final batch with {len(all_results)} entries")
@@ -355,8 +353,8 @@ def process_audio_files_with_transcriptions(base_dir: str, output_dir: str = "ou
         print("\nNo remaining results to save")
 
 if __name__ == "__main__":
-    base_dir = "/external2/datasets/librespeech/mls_german/train"
-    output_dir = "/external2/datasets/json_jata/german/train"
+    base_dir = "/external2/datasets/librespeech/mls_german/test"
+    output_dir = "/external2/datasets/json_jata/german/test"
     
     print(f"Processing files from base directory: {base_dir}")
     print(f"Saving output to: {output_dir}")

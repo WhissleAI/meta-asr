@@ -8,17 +8,9 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 load_dotenv()
 def process_jsonl_annotations(input_file: str, output_file: str, api_key: str):
-    """
-    Process JSONL file to annotate text while preserving specific tags and replacing NER tags.
-    
-    Args:
-        input_file (str): Path to input JSONL file
-        output_file (str): Path to output JSONL file
-        api_key (str): Google API key for Gemini
-    """
-    # Configure the Gemini API
+   
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.0-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     ENTITIES = [
         "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",

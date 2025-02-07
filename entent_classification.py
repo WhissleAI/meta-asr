@@ -1,159 +1,175 @@
-import json
-import re
-from typing import List, Dict, Tuple
-import vertexai
 import os
-from vertexai.generative_models import GenerativeModel
-from dotenv import load_dotenv
+import json
+import time
+import re
 import google.generativeai as genai
+from dotenv import load_dotenv
+
+# Load environment variables
 load_dotenv()
-def process_jsonl_annotations(input_file: str, output_file: str, api_key: str):
-   
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+
+# Configure Gemini API
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+def remove_existing_tags(text):
+    """Remove specific existing tags while preserving their content."""
+    # Preserve these specific tags and their content
+    preserved_tags = {
+        r'GENDER_[A-Z]+': lambda m: m.group(0),  # Keep gender tags as is
+        r'EMOTION_[A-Z]+': lambda m: m.group(0),  # Keep emotion tags as is
+        r'AGE_[0-9_]+': lambda m: m.group(0),     # Keep age tags as is
+        r'SPEAKER_CHANGE': lambda m: m.group(0),   # Keep speaker change tags as is
+    }
     
-    ENTITIES = [
-        "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",
-        "DATE", "TIME", "DURATION", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "DEADLINE", "DELIVERY_DATE", "DELIVERY_TIME",
-        "EVENT", "MEETING", "TASK", "PROJECT_NAME", "ACTION_ITEM", "PRIORITY", "FEEDBACK", "REVIEW", "RATING", "COMPLAINT",
-        "QUESTION", "RESPONSE", "NOTIFICATION_TYPE", "AGENDA", "REMINDER", "NOTE", "RECORD", "ANNOUNCEMENT", "UPDATE",
-        "SCHEDULE", "BOOKING_REFERENCE", "APPOINTMENT_NUMBER", "ORDER_NUMBER", "INVOICE_NUMBER", "PAYMENT_METHOD",
-        "PAYMENT_AMOUNT", "BANK_NAME", "ACCOUNT_NUMBER", "CREDIT_CARD_NUMBER", "TAX_ID", "SOCIAL_SECURITY_NUMBER",
-        "DRIVER'S_LICENSE", "PASSPORT_NUMBER", "INSURANCE_PROVIDER", "POLICY_NUMBER", "INSURANCE_PLAN", "CLAIM_NUMBER",
-        "POLICY_HOLDER", "BENEFICIARY", "RELATIONSHIP", "EMERGENCY_CONTACT", "PROJECT_PHASE", "VERSION", "DEVELOPMENT_STAGE",
-        "DEVICE_NAME", "OPERATING_SYSTEM", "SOFTWARE_VERSION", "BRAND", "MODEL_NUMBER", "LICENSE_PLATE", "VEHICLE_MAKE",
-        "VEHICLE_MODEL", "VEHICLE_TYPE", "FLIGHT_NUMBER", "HOTEL_NAME", "ROOM_NUMBER", "TRANSACTION_ID", "TICKET_NUMBER",
-        "SEAT_NUMBER", "GATE", "TERMINAL", "TRANSACTION_TYPE", "PAYMENT_STATUS", "PAYMENT_REFERENCE", "INVOICE_STATUS",
-        "SYMPTOM", "DIAGNOSIS", "MEDICATION", "DOSAGE", "ALLERGY", "PRESCRIPTION", "TEST_NAME", "TEST_RESULT", "MEDICAL_RECORD",
-        "HEALTH_STATUS", "HEALTH_METRIC", "VITAL_SIGN", "DOCTOR_NAME", "HOSPITAL_NAME", "DEPARTMENT", "WARD", "CLINIC_NAME",
-        "WEBSITE", "URL", "IP_ADDRESS", "MAC_ADDRESS", "USERNAME", "PASSWORD", "LANGUAGE", "CODE_SNIPPET", "DATABASE_NAME",
-        "API_KEY", "WEB_TOKEN", "URL_PARAMETER", "SERVER_NAME", "ENDPOINT", "DOMAIN",
-        "PRODUCT", "SERVICE", "CATEGORY", "BRAND", "ORDER_STATUS", "DELIVERY_METHOD", "RETURN_STATUS", "WARRANTY_PERIOD",
-        "CANCELLATION_REASON", "REFUND_AMOUNT", "EXCHANGE_ITEM", "GIFT_OPTION", "GIFT_MESSAGE",
-        "FOOD_ITEM", "DRINK_ITEM", "CUISINE", "MENU_ITEM", "ORDER_NUMBER", "DELIVERY_ESTIMATE", "RECIPE", "INGREDIENT",
-        "DISH_NAME", "PORTION_SIZE", "COOKING_TIME", "PREPARATION_METHOD",
-        "AGE", "GENDER", "NATIONALITY", "RELIGION", "MARITAL_STATUS", "OCCUPATION", "EDUCATION_LEVEL", "DEGREE",
-        "SKILL", "EXPERIENCE", "YEARS_OF_EXPERIENCE", "CERTIFICATION",
-        "MEASUREMENT", "DISTANCE", "WEIGHT", "HEIGHT", "VOLUME", "TEMPERATURE", "SPEED", "CAPACITY", "DIMENSION", "AREA",
-        "SHAPE", "COLOR", "MATERIAL", "TEXTURE", "PATTERN", "STYLE",
-        "WEATHER_CONDITION", "TEMPERATURE_SETTING", "HUMIDITY_LEVEL", "WIND_SPEED", "RAIN_INTENSITY", "AIR_QUALITY",
-        "POLLUTION_LEVEL", "UV_INDEX",
-        "QUESTION_TYPE", "REQUEST_TYPE", "SUGGESTION_TYPE", "ALERT_TYPE", "REMINDER_TYPE", "STATUS", "ACTION", "COMMAND"
-    ]
+    # First preserve the special tags we want to keep
+    preserved_text = text
+    for pattern, replacement in preserved_tags.items():
+        preserved_text = re.sub(pattern, replacement, preserved_text)
+    
+    # Then remove all other ENTITY tags
+    cleaned_text = re.sub(r'ENTITY_\w+\s|\s?END', '', preserved_text)
+    
+    return cleaned_text
 
-    def preserve_special_tags(text: str) -> Tuple[str, Dict[str, List[str]]]:
-        """Extract and preserve special tags (AGE, GENDER, EMOTION) for later restoration"""
-        preserved_tags = {
-            'age': re.findall(r'AGE_[^\s]+', text),
-            'gender': re.findall(r'GENDER_[^\s]+', text),
-            'emotion': re.findall(r'EMOTION_[^\s]+', text),
-            'speaker': re.findall(r'SPEAKER_[^\s]+', text)
-        }
-        
-        # Remove the special tags temporarily
-        text = re.sub(r'(AGE_[^\s]+|GENDER_[^\s]+|EMOTION_[^\s]+|SPEAKER_[^\s]+)', ' PLACEHOLDER ', text)
-        return text, preserved_tags
+def fix_end_tags(text):
+    """Add space before END tags if missing."""
+    return re.sub(r'(\w)END', r'\1 END', text)
 
-    def restore_special_tags(text: str, preserved_tags: Dict[str, List[str]]) -> str:
-        """Restore the preserved special tags back into the text"""
-        for tag_type in preserved_tags:
-            for tag in preserved_tags[tag_type]:
-                text = text.replace('PLACEHOLDER', tag, 1)
-        return text
+def annotate_sentences(sentences):
+    prompt = f'''
+You are given a list of sentences that may contain existing tags like GENDER_FEMALE, EMOTION_NEU, AGE_45_60, and SPEAKER_CHANGE.
 
-    def annotate_text(text: str) -> str:
-        """
-        Annotate the text using Vertex AI while preserving special tags.
-        """
-        # First preserve special tags
-        text_without_tags, preserved_tags = preserve_special_tags(text)
-        
-        # Remove existing NER tags
-        text_without_ner = re.sub(r'NER_\w+\s|END\s?', '', text_without_tags)
-        
+Your task is to:
+1. Preserve these existing tags exactly as they appear
+2. Add entity annotations for other important entities in the text
+3. Insert entity tags in the format `ENTITY_<TYPE>` before each entity and append ` END` (with a space) after it
+4. Focus on identifying and tagging ALL entities in the text, not just names and organizations
+5. Return the output as a JSON array of annotated sentences
+
+Important:
+- Do NOT modify or add tags for gender, emotion, age, or speaker changes
+- Preserve any existing tags exactly as they appear
+- Ensure comprehensive entity coverage for all other entity types
+- Always include a space before END tags
+
+Entities to annotate (exclude gender, emotion, age, and speaker tags):
+[
+            "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE", 
+            "DATE", "TIME", "DURATION", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "DEADLINE", "DELIVERY_DATE", "DELIVERY_TIME", 
+            "EVENT", "MEETING", "TASK", "PROJECT_NAME", "ACTION_ITEM", "PRIORITY", "FEEDBACK", "REVIEW", "RATING", "COMPLAINT", 
+            "QUESTION", "RESPONSE", "NOTIFICATION_TYPE", "AGENDA", "REMINDER", "NOTE", "RECORD", "ANNOUNCEMENT", "UPDATE", 
+            "SCHEDULE", "BOOKING_REFERENCE", "APPOINTMENT_NUMBER", "ORDER_NUMBER", "INVOICE_NUMBER", "PAYMENT_METHOD", 
+            "PAYMENT_AMOUNT", "BANK_NAME", "ACCOUNT_NUMBER", "CREDIT_CARD_NUMBER", "TAX_ID", "SOCIAL_SECURITY_NUMBER", 
+            "DRIVER'S_LICENSE", "PASSPORT_NUMBER", "INSURANCE_PROVIDER", "POLICY_NUMBER", "INSURANCE_PLAN", "CLAIM_NUMBER", 
+            "POLICY_HOLDER", "BENEFICIARY", "RELATIONSHIP", "EMERGENCY_CONTACT", "PROJECT_PHASE", "VERSION", "DEVELOPMENT_STAGE",
+            "DEVICE_NAME", "OPERATING_SYSTEM", "SOFTWARE_VERSION", "BRAND", "MODEL_NUMBER", "LICENSE_PLATE", "VEHICLE_MAKE", 
+            "VEHICLE_MODEL", "VEHICLE_TYPE", "FLIGHT_NUMBER", "HOTEL_NAME", "ROOM_NUMBER", "TRANSACTION_ID", "TICKET_NUMBER", 
+            "SEAT_NUMBER", "GATE", "TERMINAL", "TRANSACTION_TYPE", "PAYMENT_STATUS", "PAYMENT_REFERENCE", "INVOICE_STATUS",
+            "SYMPTOM", "DIAGNOSIS", "MEDICATION", "DOSAGE", "ALLERGY", "PRESCRIPTION", "TEST_NAME", "TEST_RESULT", "MEDICAL_RECORD", 
+            "HEALTH_STATUS", "HEALTH_METRIC", "VITAL_SIGN", "DOCTOR_NAME", "HOSPITAL_NAME", "DEPARTMENT", "WARD", "CLINIC_NAME", 
+            "WEBSITE", "URL", "IP_ADDRESS", "MAC_ADDRESS", "USERNAME", "PASSWORD", "LANGUAGE", "CODE_SNIPPET", "DATABASE_NAME", 
+            "API_KEY", "WEB_TOKEN", "URL_PARAMETER", "SERVER_NAME", "ENDPOINT", "DOMAIN", 
+            "PRODUCT", "SERVICE", "CATEGORY", "BRAND", "ORDER_STATUS", "DELIVERY_METHOD", "RETURN_STATUS", "WARRANTY_PERIOD", 
+            "CANCELLATION_REASON", "REFUND_AMOUNT", "EXCHANGE_ITEM", "GIFT_OPTION", "GIFT_MESSAGE", 
+            "FOOD_ITEM", "DRINK_ITEM", "CUISINE", "MENU_ITEM", "ORDER_NUMBER", "DELIVERY_ESTIMATE", "RECIPE", "INGREDIENT", 
+            "DISH_NAME", "PORTION_SIZE", "COOKING_TIME", "PREPARATION_METHOD", 
+            "NATIONALITY", "RELIGION", "MARITAL_STATUS", "OCCUPATION", "EDUCATION_LEVEL", "DEGREE", 
+            "SKILL", "EXPERIENCE", "YEARS_OF_EXPERIENCE", "CERTIFICATION", 
+            "MEASUREMENT", "DISTANCE", "WEIGHT", "HEIGHT", "VOLUME", "TEMPERATURE", "SPEED", "CAPACITY", "DIMENSION", "AREA", 
+            "SHAPE", "COLOR", "MATERIAL", "TEXTURE", "PATTERN", "STYLE", 
+            "WEATHER_CONDITION", "TEMPERATURE_SETTING", "HUMIDITY_LEVEL", "WIND_SPEED", "RAIN_INTENSITY", "AIR_QUALITY", 
+            "POLLUTION_LEVEL", "UV_INDEX", 
+            "QUESTION_TYPE", "REQUEST_TYPE", "SUGGESTION_TYPE", "ALERT_TYPE", "REMINDER_TYPE", "STATUS", "ACTION", "COMMAND"
+]
+
+Example input: "hi folks, i'm karen botic with ion sun valley. GENDER_FEMALE today we have a meeting at 2pm."
+Example output: "hi folks, i'm ENTITY_PERSON_NAME karen botic END with ENTITY_ORGANIZATION ion sun valley END. GENDER_FEMALE today we have a ENTITY_MEETING meeting END at ENTITY_TIME 2pm END."
+
+Sentences to Annotate:
+{json.dumps(sentences, ensure_ascii=False)}
+'''
+
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+        assistant_reply = response.text.strip()
+
+        # Remove markdown code fences if present
+        if assistant_reply.startswith("```"):
+            lines = assistant_reply.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            assistant_reply = "\n".join(lines).strip()
+
         try:
-            vertexai.init(project="stream2action", location="us-central1")
-            model = GenerativeModel("gemini-1.5-flash-002")
-            
-            prompt = f'''
-            Annotate the following text with entity tags from the provided list. Preserve any existing AGE, GENDER, EMOTION, or SPEAKER tags.
+            annotated_sentences = json.loads(assistant_reply)
+            if isinstance(annotated_sentences, list):
+                # Apply fix_end_tags to each sentence
+                return [fix_end_tags(sentence) for sentence in annotated_sentences]
+            else:
+                print("Assistant did not return a list. Fallback to raw reply.")
+                return [fix_end_tags(assistant_reply)] * len(sentences)
+        except json.JSONDecodeError:
+            print("JSON decoding failed. Fallback to raw replies.")
+            return [fix_end_tags(assistant_reply)] * len(sentences)
+    except Exception as e:
+        print(f"Error annotating batch: {e}")
+        return sentences
 
-            Rules:
-            1. Use format: ENTITY_<type> for entities and END to close each entity
-            2. Only use entity types from the provided list
-            3. Annotate all relevant entities in the text
-            4. Preserve any existing AGE_, GENDER_, EMOTION_, or SPEAKER_ tags
-            5. Do not add any additional text or explanations
-            6. Ensure proper nesting and closing of tags
+def process_jsonl_file(input_path, output_path, batch_size=10):
+    # Create output directory if it doesn't exist
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-            Available Entity Types:
-            {json.dumps(ENTITIES, indent=2)}
+    # Read all lines from input file
+    with open(input_path, 'r', encoding='utf-8') as f:
+        records = [json.loads(line) for line in f]
 
-            Text to annotate:
-            {text_without_ner}
-            '''
-            
-            response = model.generate_content(prompt)
-            annotated_text = response.text.strip()
-            
-            # Restore the preserved tags
-            final_text = restore_special_tags(annotated_text, preserved_tags)
-            
-            # Validate the annotations
-            for entity in ENTITIES:
-                # Check if opening tags match closing tags
-                opens = len(re.findall(f'ENTITY_{entity}', final_text))
-                closes = len(re.findall('END', final_text))
-                if opens != closes:
-                    print(f"Warning: Mismatched tags for {entity} in text")
-            
-            return final_text
-            
-        except Exception as e:
-            print(f"Error during annotation: {str(e)}")
-            return text
+    total_records = len(records)
+    print(f"Total records to process: {total_records}")
 
-    # Process the JSONL file
-    processed_count = 0
-    error_count = 0
-    
-    with open(input_file, 'r', encoding='utf-8') as f_in, \
-         open(output_file, 'w', encoding='utf-8') as f_out:
-        
-        for line_number, line in enumerate(f_in, 1):
-            try:
-                data = json.loads(line)
-                if 'text' in data:
-                    data['text'] = annotate_text(data['text'])
-                    f_out.write(json.dumps(data, ensure_ascii=False) + '\n')
-                    processed_count += 1
-                    
-                    # Print progress every 100 lines
-                    if processed_count % 100 == 0:
-                        print(f"Processed {processed_count} lines...")
-                        
-            except json.JSONDecodeError as e:
-                print(f"Error processing line {line_number}: {str(e)}")
-                error_count += 1
-                continue
-            
-            except Exception as e:
-                print(f"Unexpected error at line {line_number}: {str(e)}")
-                error_count += 1
-                continue
+    # Process records in batches
+    total_batches = (total_records + batch_size - 1) // batch_size
+    processed_records = []
 
-    print(f"\nProcessing complete:")
-    print(f"Total lines processed: {processed_count}")
-    print(f"Errors encountered: {error_count}")
+    for batch_num in range(total_batches):
+        start_idx = batch_num * batch_size
+        end_idx = min((batch_num + 1) * batch_size, total_records)
+        batch_records = records[start_idx:end_idx]
+        print(f"\nProcessing batch {batch_num + 1}/{total_batches} (records {start_idx + 1} to {end_idx})...")
 
-# Usage example
+        # Prepare sentences for annotation
+        original_texts = []
+
+        for record in batch_records:
+            text = record['text']
+            # Remove existing entity tags while preserving special tags
+            cleaned_text = remove_existing_tags(text)
+            original_texts.append(cleaned_text)
+
+        # Get new annotations
+        annotated_texts = annotate_sentences(original_texts)
+
+        # Combine annotations with preserved tags
+        for i, (record, annotated_text) in enumerate(zip(batch_records, annotated_texts)):
+            record['text'] = annotated_text
+            processed_records.append(record)
+
+        # Write batch to output file
+        with open(output_path, 'a', encoding='utf-8') as f:
+            for record in processed_records[-batch_size:]:
+                f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+    print("\nProcessing complete.")
+    print(f"Processed records saved to: {output_path}")
+
 if __name__ == "__main__":
-    api_key = os.getenv('GOOGLE_API_KEY')
-    if not api_key:
-        raise ValueError("Please set the GOOGLE_API_KEY environment variable")
-        
-    process_jsonl_annotations(
-        input_file="/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/decoded_extra.jsonl",
-        output_file="/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/temp.jsonl",
-        api_key=api_key
-    )
+    input_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/decoded_extra.jsonl"
+    output_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/genai_decoded_extra.jsonl"
+    
+    # Clear output file if it exists
+    if os.path.exists(output_jsonl_path):
+        os.remove(output_jsonl_path)
+    
+    process_jsonl_file(input_jsonl_path, output_jsonl_path)

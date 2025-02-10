@@ -1,6 +1,7 @@
 import os
 import json
 import torch
+import asyncio
 import librosa
 import numpy as np
 import pandas as pd
@@ -9,7 +10,7 @@ import torch.nn as nn
 import soundfile as sf
 from pathlib import Path
 from dotenv import load_dotenv
-from whisper import load_model
+from whissle import WhissleClient
 from flair.data import Sentence
 from pyannote.audio import Pipeline
 from collections import defaultdict
@@ -61,8 +62,8 @@ processor = Wav2Vec2Processor.from_pretrained(model_name)
 model = AgeGenderModel.from_pretrained(model_name).to(device)
 ner_tagger = SequenceTagger.load("flair/ner-english-ontonotes-large")
 pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1", use_auth_token=os.getenv("HF_TOKEN"))
-whisper_model = load_model("base").to(device)
-
+model_name="en-US-0.6b"
+client = WhissleClient(os.getenv("WHISSLE_API_KEY"))
 def process_func(x: np.ndarray, sampling_rate: int, embeddings: bool = False) -> np.ndarray:
     y = processor(x, sampling_rate=sampling_rate)
     y = y['input_values'][0]
@@ -89,9 +90,16 @@ def get_speaker_changes(audio_path: str):
     return speaker_changes
 
 
-def transcribe_audio_segment(audio_path: str):
-    result = whisper_model.transcribe(audio_path)
-    return result["text"]
+async def transcribe_audio_segment(audio_path: str):
+    response = await client.speech_to_text(
+       audio_file_path=audio_path,
+       model_name=model_name
+   )
+    transcript = response.transcript
+    return transcript
+
+def transcribe_audio_segment_sync(audio_path: str):
+    return asyncio.run(transcribe_audio_segment(audio_path))
 
 
 def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: str = "spk_dir", max_duration: float = 20.0):
@@ -324,8 +332,9 @@ def process_large_audio(
                         speaker_segment_audio, _ = librosa.load(temp_segment_path, sr=16000)
                         emotion = extract_emotion(speaker_segment_audio)
                   
-                        transcription = whisper_model.transcribe(temp_segment_path)["text"]
-                        ner_text, ner_entities = process_ner(transcription)
+                        transcription = transcribe_audio_segment_sync(temp_segment_path)
+                        
+                        ner_text, ner_entities = process_ner(transcription.lower())
                  
                         segment = AudioSegment(
                             start_time=start_time,
@@ -400,9 +409,10 @@ def process_large_audio(
         print(f"Error processing audio file {audio_path}: {str(e)}")
         return pd.DataFrame(), []
 
+
 if __name__ == "__main__":
-    download_dir = "/external2/datasets/yt_data"
-    output_dir = "/external2/datasets/yt_data/output"
+    download_dir = "/external2/datasets/yt_data1"
+    output_dir = "/external2/datasets/yt_data1/output"
     os.makedirs(output_dir, exist_ok=True)
     
     print(f"Processing files from: {download_dir}")

@@ -102,7 +102,7 @@ if __name__ == "__main__":
 
     input_dir = "/external3/databases/peoples_speech/clean"
     output_dir = "/external2/datasets/pq"
-    batch_size = 50
+    batch_size = 100
     batch_number = 0
     process_parquet_files(
         input_dir,

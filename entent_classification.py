@@ -45,7 +45,6 @@ def fix_end_tags(text):
     pattern = r'(ENTITY_[A-Z0-9_]+\s+[^\s.,?!]+)(?!\s+END)'
     text = re.sub(pattern, r'\1 END', text)
     return text
-
 def annotate_sentences(sentences):
     prompt = f'''
 You are given a list of sentences that may contain existing tags like GENDER_FEMALE, EMOTION_NEU, AGE_45_60, and SPEAKER_CHANGE.
@@ -57,8 +56,7 @@ Your task is to:
 4. Insert entity tags in the format ENTITY_<TYPE> before each entity and append " END" (with a space) after it.
 5. Focus on identifying and tagging ALL entities in the text, not just names and organizations.
 6. Classify the **intent** of each sentence and add an **INTENT_<INTENT_TYPE>** tag at the end of the sentence.
-7. Determine the **action** associated with the intent and add an **ACTION_<ACTION_TYPE>** tag right after the intent tag.
-8. Return the output as a JSON array of annotated sentences.
+7. Return the output as a JSON array of annotated sentences.
 
 IMPORTANT:
 - Do NOT modify or add tags for gender, emotion, age, or speaker changes.
@@ -97,26 +95,17 @@ Entities to annotate (exclude gender, emotion, age, and speaker tags):
 ]
 
 Example:
-Input: "I live in USA and my friend david lives in england. AGE_45_60 GER_MALE EMOTION_HAP SPEAKER_CHANGE"
-Output: "I live in ENTITY_COUNTRY USA END and my friend ENTITY_PERSON_NAME david END lives in ENTITY_COUNTRY england END. AGE_45_60 GER_MALE EMOTION_HAP SPEAKER_CHANGE INTENT_STATERESIDENCE ACTION_PROVIDELOCATION"
+Input: "I have 15 apples and my friend david gave me 20 more. AGE_45_60 GER_MALE EMOTION_HAP SPEAKER_CHANGE"
+Output: "I have ENTITY_NUMBER 15 END apples and my friend ENTITY_PERSON_NAME david END gave me ENTITY_NUMBER 20 END more. AGE_45_60 GER_MALE EMOTION_HAP SPEAKER_CHANGE INTENT_INFORM ACTION_SHAREINFORMATION"
 
 Sentences to Annotate:
 {json.dumps(sentences, ensure_ascii=False)}
 '''
-    print("----- Prompt being sent to Gemini -----")
-    print(prompt)
-    print("----- End Prompt -----")
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         assistant_reply = response.text.strip()
 
-        print("----- Raw API Response -----")
-        print(assistant_reply)
-        print("----- End Raw Response -----")
-
-
-        # Remove markdown code fences if present
         if assistant_reply.startswith("```"):
             lines = assistant_reply.splitlines()
             if lines[0].startswith("```"):
@@ -141,12 +130,9 @@ Sentences to Annotate:
         return sentences
 
 def process_jsonl_file(input_path, output_path, batch_size=10):
-    """
-    Process the JSONL file and preserve annotations.
-    """
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
-    # Clear output file if it exists
+
     if os.path.exists(output_path):
         os.remove(output_path)
 
@@ -160,20 +146,12 @@ def process_jsonl_file(input_path, output_path, batch_size=10):
         batch_records = records[batch_num:batch_num + batch_size]
         print(f"\nProcessing batch {batch_num//batch_size + 1}/{(total_records + batch_size - 1)//batch_size}")
 
-        # Extract and clean texts
         original_texts = [remove_existing_tags(record['text']) for record in batch_records]
-        
-        # Get annotations
         annotated_texts = annotate_sentences(original_texts)
 
-        # Update records with annotated text and write to file
         with open(output_path, 'a', encoding='utf-8') as f:
             for record, annotated_text in zip(batch_records, annotated_texts):
-                # Only update if annotation was successful (contains new entity tags)
-                if 'ENTITY_' in annotated_text or 'INTENT_' in annotated_text:
-                    record['text'] = annotated_text
-                
-                # Convert record to JSON string and write to file
+                record['text'] = annotated_text
                 json_str = json.dumps(record, ensure_ascii=False)
                 f.write(json_str + '\n')
 
@@ -182,7 +160,7 @@ def process_jsonl_file(input_path, output_path, batch_size=10):
     print(f"\nProcessing complete. Output saved to: {output_path}")
 
 if __name__ == "__main__":
-    input_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/temo.jsonl"
-    output_jsonl_path = "/external2/datasets/genai_decoded_extra.jsonl"
+    input_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/all.jsonl"
+    output_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/intent_annotated.jsonl"
     
     process_jsonl_file(input_jsonl_path, output_jsonl_path)

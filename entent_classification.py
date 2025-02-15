@@ -4,10 +4,9 @@ import re
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Configure Gemini API
+
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 def remove_existing_tags(text):
@@ -15,7 +14,7 @@ def remove_existing_tags(text):
     Remove legacy (NER_) and current (ENTITY_) entity tags while preserving special tags
     like GENDER_*, EMOTION_*, AGE_*, and SPEAKER_CHANGE.
     """
-    # Preserve these specific tags as is
+
     preserved_tags = {
         r'GENDER_[A-Z]+': lambda m: m.group(0),
         r'EMOTION_[A-Z]+': lambda m: m.group(0),
@@ -26,9 +25,8 @@ def remove_existing_tags(text):
     for pattern, replacement in preserved_tags.items():
         preserved_text = re.sub(pattern, replacement, preserved_text)
 
-    # Remove both legacy and current entity tags (NER_ and ENTITY_)
     cleaned_text = re.sub(r'(?:NER|ENTITY)_\w+\s?', '', preserved_text)
-    # Remove stray END tokens
+
     cleaned_text = re.sub(r'\s?END', '', cleaned_text)
 
     return cleaned_text
@@ -37,11 +35,11 @@ def fix_end_tags(text):
     """
     Ensure that every ENTITY_ annotation is followed by a space and 'END'.
     """
-    # Add a space before any END that immediately follows a word character
+   
     text = re.sub(r'(\w)END', r'\1 END', text)
-    # Ensure proper spacing around ENTITY tags
+
     text = re.sub(r'(ENTITY_[A-Z0-9_]+)(\S)', r'\1 \2', text)
-    # Add END tag if missing
+
     pattern = r'(ENTITY_[A-Z0-9_]+\s+[^\s.,?!]+)(?!\s+END)'
     text = re.sub(pattern, r'\1 END', text)
     return text

@@ -190,10 +190,9 @@ def process_ner(text: str) -> Tuple[str, List[Dict[str, Any]]]:
     formatted_tokens = []
     current_index = 0
 
-    # Updated to use the newer Flair API
     for token in sentence:
         token_text = token.text
-        # Use the newer API to get NER tags
+    
         ner_tag = token.get_labels('ner')[0].value if token.get_labels('ner') else 'O'
 
         start_position = text.find(token_text, current_index)
@@ -204,12 +203,12 @@ def process_ner(text: str) -> Tuple[str, List[Dict[str, Any]]]:
         is_entity_end = False
         entity_type = None
 
-        # Process entity spans
+     
         for entity in sentence.get_spans('ner'):
-            if token in entity.tokens:  # Changed from direct token comparison
+            if token in entity.tokens:  
                 if token == entity.tokens[0]:
                     is_entity_start = True
-                    entity_type = entity.get_label('ner').value  # Updated to use get_label
+                    entity_type = entity.get_label('ner').value 
                 if token == entity.tokens[-1]:
                     is_entity_end = True
 
@@ -221,13 +220,13 @@ def process_ner(text: str) -> Tuple[str, List[Dict[str, Any]]]:
 
         if ner_tag != 'O':
             for entity in sentence.get_spans('ner'):
-                if token in entity.tokens:  # Changed from direct token comparison
+                if token in entity.tokens:  
                     if entity.get_label('ner').value not in [ent['type'] for ent in entities if ent['text'] == entity.text]:
                         entities.append({
                             "text": entity.text,
-                            "type": entity.get_label('ner').value,  # Updated to use get_label
-                            "start_position": entity.start_pos,  # Updated property name
-                            "end_position": entity.end_pos  # Updated property name
+                            "type": entity.get_label('ner').value, 
+                            "start_position": entity.start_pos, 
+                            "end_position": entity.end_pos  
                         })
                     break
 

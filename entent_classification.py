@@ -35,14 +35,15 @@ def fix_end_tags(text):
     """
     Ensure that every ENTITY_ annotation is followed by a space and 'END'.
     """
-   
+    if not isinstance(text, str):
+        return text
+
     text = re.sub(r'(\w)END', r'\1 END', text)
-
     text = re.sub(r'(ENTITY_[A-Z0-9_]+)(\S)', r'\1 \2', text)
-
     pattern = r'(ENTITY_[A-Z0-9_]+\s+[^\s.,?!]+)(?!\s+END)'
     text = re.sub(pattern, r'\1 END', text)
     return text
+
 def annotate_sentences(sentences):
     prompt = f'''
 You are given a list of sentences that may contain existing tags like GENDER_FEMALE, EMOTION_NEU, AGE_45_60, and SPEAKER_CHANGE.
@@ -94,7 +95,7 @@ Entities to annotate (exclude gender, emotion, age, and speaker tags):
 
 Example:
 Input: "I have 15 apples and my friend david gave me 20 more. AGE_45_60 GER_MALE EMOTION_HAP SPEAKER_CHANGE"
-Output: "I have ENTITY_NUMBER 15 END apples and my friend ENTITY_PERSON_NAME david END gave me ENTITY_NUMBER 20 END more. AGE_45_60 GER_MALE EMOTION_HAP SPEAKER_CHANGE INTENT_INFORM ACTION_SHAREINFORMATION"
+Output: "I have ENTITY_NUMBER 15 END apples and my friend ENTITY_PERSON_NAME david END gave me ENTITY_NUMBER 20 END more. AGE_45_60 GER_MALE EMOTION_HAP SPEAKER_CHANGE INTENT_INFORM"
 
 Sentences to Annotate:
 {json.dumps(sentences, ensure_ascii=False)}
@@ -128,9 +129,7 @@ Sentences to Annotate:
         return sentences
 
 def process_jsonl_file(input_path, output_path, batch_size=10):
-
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
     if os.path.exists(output_path):
         os.remove(output_path)
 
@@ -144,9 +143,19 @@ def process_jsonl_file(input_path, output_path, batch_size=10):
         batch_records = records[batch_num:batch_num + batch_size]
         print(f"\nProcessing batch {batch_num//batch_size + 1}/{(total_records + batch_size - 1)//batch_size}")
 
-        original_texts = [remove_existing_tags(record['text']) for record in batch_records]
-        annotated_texts = annotate_sentences(original_texts)
+        original_texts = []
+        for record in batch_records:
+            text_content = record.get('text')
+            if isinstance(text_content, dict) and 'sentence' in text_content:
+                original_texts.append(remove_existing_tags(text_content['sentence']))
+            elif isinstance(text_content, dict) and 'text' in text_content:
+                original_texts.append(remove_existing_tags(text_content['text']))
+            elif isinstance(text_content, str):
+                original_texts.append(remove_existing_tags(text_content))
+            else:
+                original_texts.append("")
 
+        annotated_texts = annotate_sentences(original_texts)
         with open(output_path, 'a', encoding='utf-8') as f:
             for record, annotated_text in zip(batch_records, annotated_texts):
                 record['text'] = annotated_text
@@ -160,5 +169,6 @@ def process_jsonl_file(input_path, output_path, batch_size=10):
 if __name__ == "__main__":
     input_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/all.jsonl"
     output_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/intent_annotated.jsonl"
-    
+
     process_jsonl_file(input_jsonl_path, output_jsonl_path)
+    

@@ -51,19 +51,20 @@ You are given a list of sentences that may contain existing tags like GENDER_FEM
 Your task is to:
 1. Remove any legacy entity tags such as NER_PERSON, NER_NORP, etc.
 2. Preserve these existing tags exactly as they appear.
-3. Add entity annotations for all other important entities in the text.
-4. Insert entity tags in the format ENTITY_<TYPE> before each entity and append " END" (with a space) after it.
-5. Focus on identifying and tagging ALL entities in the text, not just names and organizations.
+3. **ONLY annotate entities from the following list.** Do NOT invent new entity types or annotate entities that are not explicitly listed.
+4. Insert entity tags in the format ENTITY_<TYPE> before each entity from the list and append " END" (with a space) after it.
+5. Focus on identifying and tagging entities that are specifically mentioned in the provided list.
 6. Classify the **intent** of each sentence and add an **INTENT_<INTENT_TYPE>** tag at the end of the sentence.
 7. Return the output as a JSON array of annotated sentences.
 
 IMPORTANT:
 - Do NOT modify or add tags for gender, emotion, age, or speaker changes.
-- Remove any legacy tags (e.g., NER_PERSON) and annotate entities using **only** the ENTITY_<TYPE> format.
+- Remove any legacy tags (e.g., NER_PERSON) and annotate entities using **only** the ENTITY_<TYPE> format and **only from the provided list.**
+- **Do NOT annotate general categories like "symptoms," "emotions," "devices," or "services" unless they directly correspond to a specific entity type in the provided list.** For example, "facial deformity" should not be annotated as ENTITY_SYMPTOM if "SYMPTOM" is not intended to be a general category for annotation from the list.  Focus on the specific entity types listed.
 - Every entity annotation must be in the form "ENTITY_<TYPE> entity_text END" (notice the space before END).
 - Intent annotation must be in the form "INTENT_<INTENT_TYPE>" and placed at the end of the sentence.
 
-Entities to annotate (exclude gender, emotion, age, and speaker tags):
+Entities to annotate (ONLY USE THESE ENTITY TYPES):
 [
     "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",
     "DATE", "TIME", "DURATION", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "DEADLINE", "DELIVERY_DATE", "DELIVERY_TIME",
@@ -97,9 +98,24 @@ Example:
 Input: "I have 15 apples and my friend david gave me 20 more. AGE_45_60 GER_MALE EMOTION_HAP SPEAKER_CHANGE"
 Output: "I have ENTITY_NUMBER 15 END apples and my friend ENTITY_PERSON_NAME david END gave me ENTITY_NUMBER 20 END more. AGE_45_60 GER_MALE EMOTION_HAP SPEAKER_CHANGE INTENT_INFORM"
 
+Input: "Sophia won 1st prize in the science competition. AGE_15_20 GEN_FEMALE EMOTION_HAP SPEAKER_CHANGE"
+Output: "ENTITY_PERSON_NAME Sophia END won ENTITY_NUMBER 1st END prize in the science competition. AGE_15_20 GEN_FEMALE EMOTION_HAP SPEAKER_CHANGE INTENT_ANNOUNCE"
+
+Input: "I think my appointment is on 10th July. AGE_40_50 GEN_FEMALE EMOTION_NEU SPEAKER_CHANGE"
+Output: "I think my appointment is on ENTITY_DATE 10th July END. AGE_40_50 GEN_FEMALE EMOTION_NEU SPEAKER_CHANGE INTENT_REMEMBER"
+
+**Example of what NOT to do:**
+Input: "Because of facial deformity, she lives a life of fear and shame. AGE_45_60 GER_OTHER EMOTION_FEAR INTENT_INFORM"
+Output: "Because of facial deformity, she lives a life of fear and shame. AGE_45_60 GER_OTHER EMOTION_FEAR INTENT_INFORM"  (No ENTITY_SYMPTOM annotation, as 'SYMPTOM' as a general category isn't the focus if facial deformity isn't a specific entity you are looking for, and SYMPTOM type might not be intended for broad categories like this unless defined more specifically in your desired entity types)
+
+Input: "A device cannot see services that are in different scopes. AGE_45_60 GER_OTHER EMOTION_NEUTRAL INTENT_INFORM"
+Output: "A device cannot see services that are in different scopes. AGE_45_60 GER_OTHER EMOTION_NEUTRAL INTENT_INFORM" (No ENTITY_DEVICE or ENTITY_SERVICE annotations if 'DEVICE' and 'SERVICE' are meant to be more specific types from your list and not general categories. If 'DEVICE_NAME' is in your list, and you meant specific device names, then "device" here might be too generic to tag as ENTITY_DEVICE_NAME unless it's clarified in your use case)
+
+
 Sentences to Annotate:
 {json.dumps(sentences, ensure_ascii=False)}
 '''
+
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
@@ -167,8 +183,8 @@ def process_jsonl_file(input_path, output_path, batch_size=10):
     print(f"\nProcessing complete. Output saved to: {output_path}")
 
 if __name__ == "__main__":
-    input_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/all.jsonl"
-    output_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/intent_annotated.jsonl"
+    input_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/ner_data/clean_output_cv.jsonl"
+    output_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/ner_data/genimi_cv.jsonl"
 
     process_jsonl_file(input_jsonl_path, output_jsonl_path)
     

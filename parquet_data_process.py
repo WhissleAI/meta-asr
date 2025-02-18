@@ -272,7 +272,7 @@ def process_audio_files(base_dir: str, output_dir: str = "output", batch_size: i
         print("\nNo remaining results to save")
 
 if __name__ == "__main__":
-    base_dir = "/external3/databases/ps_data/pq"
+    base_dir = "/external3/databases/ps_data1"
     output_dir = "/external2/datasets/json_data/people_speech"
     
     print(f"Processing files from base directory: {base_dir}")

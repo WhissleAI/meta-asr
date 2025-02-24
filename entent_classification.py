@@ -183,8 +183,8 @@ def process_jsonl_file(input_path, output_path, batch_size=10):
     print(f"\nProcessing complete. Output saved to: {output_path}")
 
 if __name__ == "__main__":
-    input_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/ner_metadata/remaining_clean_output_cv.jsonl"
-    output_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/ner_metadata/remaining_gemini_output_cv.jsonl"
+    input_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/ner_metadata/youtube.jsonl"
+    output_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/gemini_metadata/youtube.jsonl"
 
     process_jsonl_file(input_jsonl_path, output_jsonl_path)
     

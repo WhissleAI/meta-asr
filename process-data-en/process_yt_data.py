@@ -152,24 +152,37 @@ def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000) -> str:
 
 
 def convert_mp4_to_wav(mp4_path: str) -> str:
-
     file_ext = os.path.splitext(mp4_path)[1].lower()
 
     if file_ext == '.mp4' or file_ext == '.webm':
-
-        output_dir = "/external2/datasets/yt_data/yt_audio"
+        output_dir = "/external2/datasets/hf_data_output_audio"
         os.makedirs(output_dir, exist_ok=True)
-
-
         wav_path = os.path.join(output_dir, os.path.splitext(os.path.basename(mp4_path))[0] + ".wav")
+        
+        # Try using a direct FFmpeg command instead of moviepy
+        try:
+            import subprocess
+            cmd = [
+                "ffmpeg", "-i", mp4_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", 
+                "-ac", "1", wav_path, "-y"
+            ]
+            subprocess.run(cmd, check=True)
+            return wav_path
+        except Exception as e:
+            print(f"FFmpeg direct command failed: {e}, trying moviepy as fallback")
+            
+            # Fallback to moviepy
+            try:
+                video = mp.VideoFileClip(mp4_path)
+                video.audio.write_audiofile(wav_path, fps=16000)
+                video.close()
+                return wav_path
+            except Exception as e:
+                print(f"Error converting {mp4_path} to wav: {e}")
+                # Return original path if conversion fails
+                return mp4_path
 
-        video = mp.VideoFileClip(mp4_path)
-        video.audio.write_audiofile(wav_path)
-        video.close()
-
-        return wav_path
-
-    return mp4_path
+    return mp4_path  # Return original path if it's not mp4/webm
 @dataclass
 class AudioSegment:
     start_time: float
@@ -293,7 +306,7 @@ def process_large_audio(
     audio_path: str,
     chunk_duration: float = 20.0,
     output_base_dir: str = "output"
-) -> Tuple[pd.DataFrame, List[Dict[str, str]]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
     chunks_dir = os.path.abspath(os.path.join(output_base_dir, "audio_chunks"))
     results_dir = os.path.abspath(os.path.join(output_base_dir, "results"))
 
@@ -301,7 +314,18 @@ def process_large_audio(
     os.makedirs(results_dir, exist_ok=True)
 
     processed_audio_path = convert_mp4_to_wav(audio_path)
-    signal, sr = librosa.load(processed_audio_path, sr=16000)
+    try:
+        # Replace librosa.load with soundfile
+        import soundfile as sf
+        signal, sr = sf.read(processed_audio_path)
+        # If the sample rate is not 16000, resample it
+        if sr != 16000:
+            import resampy
+            signal = resampy.resample(signal, sr, 16000)
+            sr = 16000
+    except Exception as e:
+        print(f"Error loading audio file {processed_audio_path}: {str(e)}")
+        return [], []
 
     all_data = []
     chunk_data: Dict[str, ChunkData] = defaultdict(ChunkData)
@@ -378,21 +402,23 @@ def process_large_audio(
                             ner_tags=ner_entities
                         )
 
-                        all_data.append({
-                            'Start Time': start_time,
-                            'End Time': end_time,
-                            'Speaker': speaker,
-                            'Age': float(age),
-                            'Gender': int(gender),
-                            'Transcription': transcription,
-                            'NER_Tagged_Text': ner_text,
-                            'NER_Entities': json.dumps(ner_entities),
+                        segment_data = {
+                            'start_time': start_time,
+                            'end_time': end_time,
+                            'speaker': speaker,
+                            'age': float(age),
+                            'gender': int(gender),
+                            'transcription': transcription,
+                            'ner_tagged_text': ner_text,
+                            'ner_entities': ner_entities,  # Store as native JSON, not string
                             'emotion': emotion,
-                            'Audio File Path': os.path.abspath(chunk_path)  # Store absolute path
-                        })
+                            'audio_file_path': os.path.abspath(chunk_path)  # Store absolute path
+                        }
+                        
+                        all_data.append(segment_data)
 
                         chunk_data[chunk_filename].segments.append(segment)
-                        chunk_data[chunk_filename].filepath = os.path.abspath(chunk_path)  # Store absolute path
+                        chunk_data[chunk_filename].filepath = os.path.abspath(chunk_path)
 
                     except Exception as e:
                         print(f"Error processing segment in chunk {chunk_filename}: {str(e)}")
@@ -412,11 +438,14 @@ def process_large_audio(
                     torch.cuda.empty_cache()
 
         if all_data:
-            df = pd.DataFrame(all_data)
-            csv_path = os.path.join(results_dir, f"{base_filename}_processed_data.csv")
-            df.to_csv(csv_path, index=False)
-            print(f"Saved CSV to: {csv_path}")
+            # Save as JSONL instead of CSV
+            jsonl_path = os.path.join(results_dir, f"{base_filename}_processed_data.jsonl")
+            with open(jsonl_path, 'w', encoding='utf-8') as f:
+                for item in all_data:
+                    f.write(json.dumps(item, ensure_ascii=False) + '\n')
+            print(f"Saved JSONL to: {jsonl_path}")
 
+            # Save the audio-text pairs
             chunk_texts = [
                 {
                     "audio_filepath": data.filepath,
@@ -425,23 +454,25 @@ def process_large_audio(
                 for data in chunk_data.values()
             ]
 
-            json_path = os.path.join(results_dir, f"{base_filename}_audio_text_pairs.json")
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(chunk_texts, f, indent=2, ensure_ascii=False)
-            print(f"Saved JSON to: {json_path}")
+            # Save audio-text pairs as JSONL instead of JSON
+            audio_text_jsonl_path = os.path.join(results_dir, f"{base_filename}_audio_text_pairs.jsonl")
+            with open(audio_text_jsonl_path, 'w', encoding='utf-8') as f:
+                for item in chunk_texts:
+                    f.write(json.dumps(item, ensure_ascii=False) + '\n')
+            print(f"Saved audio-text pairs JSONL to: {audio_text_jsonl_path}")
 
-            return df, chunk_texts
+            return all_data, chunk_texts
 
-        return pd.DataFrame(), []
+        return [], []
 
     except Exception as e:
         print(f"Error processing audio file {audio_path}: {str(e)}")
-        return pd.DataFrame(), []
+        return [], []
 
 
 if __name__ == "__main__":
-    download_dir = "/external2/datasets/yt_data1"
-    output_dir = "/external2/datasets/yt_data/output"
+    download_dir = "/external2/datasets/HR_dataset"
+    output_dir = "/external2/datasets/hf_data_output"
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Processing files from: {download_dir}")

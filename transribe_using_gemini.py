@@ -82,15 +82,13 @@ def main():
         f.write("-" * 80 + "\n")
         f.write("Audio File Path | Transcription\n")
         f.write("-" * 80 + "\n")
-    
-    # Process all WAV files
+ 
     successful_transcriptions = 0
     
     for i, audio_file in enumerate(wav_files, 1):
         try:
             print(f"Processing [{i}/{total_files}]: {audio_file}")
             
-            # Add a size check
             file_size = audio_file.stat().st_size
             if file_size > 20 * 1024 * 1024:  # 20MB limit
                 error_msg = f"Skipping: File too large ({file_size / 1024 / 1024:.2f} MB)"
@@ -117,13 +115,7 @@ def main():
             # Log the error to the output file
             with open(output_file, "a", encoding="utf-8") as f:
                 f.write(f"{audio_file} | ERROR: {str(e)}\n")
-    
-    # Print summary
-    print("\nTranscription Summary:")
-    print(f"Total files processed: {total_files}")
-    print(f"Successful transcriptions: {successful_transcriptions}")
-    print(f"Failed transcriptions: {total_files - successful_transcriptions}")
-    print(f"Results saved to: {output_file}")
+
 
 if __name__ == "__main__":
     main()

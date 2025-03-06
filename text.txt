@@ -1,4 +1,0 @@
-youtube data = gemini
-common voice = gemini
-avspeech-data-en = gemini
-fin missing data

@@ -149,16 +149,16 @@ def convert_json_format(input_dir: str, output_dir: str, audio_base_dir: str):
                 continue
     
     if all_results:
-        output_path = os.path.join(output_dir, "avspeech-data_processed.json")
+        output_path = os.path.join(output_dir, "avspeech-data_processed.jsonl")
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(all_results, f, indent=2, ensure_ascii=False)
+            for entry in all_results:
+                f.write(json.dumps(entry, ensure_ascii=False) + '\n')
         print(f"\nSaved {len(all_results)} entries to: {output_path}")
-    else:
-        print("\nNo results were generated")
+
 
 if __name__ == "__main__":
-    input_dir = "/external1/datasets/asr-himanshu/avspeech-data/transcripts"
-    output_dir = "/external1/datasets/asr-himanshu/avspeech-data_processed2"
+    input_dir = "/external1/datasets/asr-himanshu/avspeech-data/transcripts1"
+    output_dir = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/ner_metadata"
     audio_base_dir = "/external1/datasets/asr-himanshu/avspeech-data/audio"
     
     print(f"Processing files from: {input_dir}")

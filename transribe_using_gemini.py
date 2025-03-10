@@ -59,7 +59,7 @@ def transcribe_audio(audio_path):
 
 def main():
     # Directory containing audio files
-    audio_dir = Path("/external2/datasets/hf_data")  # Updated path
+    audio_dir = Path("/external2/datasets/hf_data_output/audio_chunks")  # Updated path
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     output_file = f"transcriptions_{timestamp}.txt"
     

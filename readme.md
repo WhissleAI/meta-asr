@@ -21,6 +21,12 @@ meta-asr/
 │   │── process_common_voice.py    # Processes Common Voice dataset
 │   │── process_opensr.py          # Processes OpenSR dataset
 │   │── process_yt_data.py         # Processes YouTube dataset
+|── annote-entent/
+|   │── german.py    # to annote german data
+|   │── italian.py    # to annote italian data
+|   │── port.py    # to annote portuguse data
+|   │── spanish.py    # to annote spanish data
+│   │── french.py    # to annote french dat
 │── process-data-mls/         # Scripts for MultiLingual Speech (MLS) processing
 │   │── mls_spanish.py         # Processes Spanish speech data
 │   │── process_mls_french.py  # Processes French speech data

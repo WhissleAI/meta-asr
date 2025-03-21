@@ -5,9 +5,7 @@ import librosa
 import numpy as np
 from pathlib import Path
 from dotenv import load_dotenv
-from flair.data import Sentence
 from collections import defaultdict
-from flair.models import SequenceTagger
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Any
 from transformers import (
@@ -58,7 +56,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
 processor = Wav2Vec2Processor.from_pretrained(model_name)
 model = AgeGenderModel.from_pretrained(model_name).to(device)
-ner_tagger = SequenceTagger.load("flair/ner-english-ontonotes-large")
 
 def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000) -> str:
     model_name = "superb/hubert-large-superb-er"
@@ -95,29 +92,7 @@ class AudioSegment:
     transcription: str
     emotion: str
     chunk_filename: str
-    ner_tags: List[Dict[str, Any]] = field(default_factory=list)
-
-def process_ner(text: str) -> Tuple[str, List[Dict[str, Any]]]:
-    sentence = Sentence(text)
-    ner_tagger.predict(sentence)
-    
-    entities = []
-    formatted_text = text
-    
-    for entity in sentence.get_spans('ner'):
-        entity_text = entity.text
-        entity_type = entity.tag
-        replacement = f"NER_{entity_type} {entity_text} END"
-        formatted_text = formatted_text.replace(entity_text, replacement, 1)
-        
-        entities.append({
-            "text": entity_text,
-            "type": entity_type,
-            "start_position": entity.start_position,
-            "end_position": entity.end_position
-        })
-    
-    return formatted_text, entities
+    duration: float
 
 @dataclass
 class ChunkData:
@@ -131,12 +106,10 @@ class ChunkData:
             age_bucket = self.get_age_bucket(segment.age)
             gender_text = "MALE" if segment.gender == 1 else "FEMALE"
             
-            ner_text, entities = process_ner(segment.transcription.lower())
-            segment.ner_tags = entities  
-            
+            transcription = segment.transcription.lower()
             metadata = f"AGE_{age_bucket} GENDER_{gender_text} EMOTION_{segment.emotion.upper()}"
             
-            texts.append(f"{ner_text} {metadata}")
+            texts.append(f"{transcription} {metadata}")
         
         return " ".join(texts)
 
@@ -220,6 +193,9 @@ def process_audio_files(base_dir: str, output_dir: str = "output", batch_size: i
             signal, sr = librosa.load(audio_path, sr=16000)
             speaker = os.path.splitext(os.path.basename(audio_path))[0].split('_')[0]
             
+            # Calculate duration in seconds
+            duration = len(signal) / sr
+            
             y = processor(signal, sampling_rate=sr)
             y = y['input_values'][0]
             y = y.reshape(1, -1)
@@ -234,13 +210,14 @@ def process_audio_files(base_dir: str, output_dir: str = "output", batch_size: i
             
             segment_data = AudioSegment(
                 start_time=0,
-                end_time=len(signal) / sr,
+                end_time=duration,
                 speaker=speaker,
                 age=age,
                 gender=gender,
                 transcription=transcription,
                 emotion=emotion,
-                chunk_filename=os.path.basename(audio_path)
+                chunk_filename=os.path.basename(audio_path),
+                duration=duration
             )
             
             chunk = ChunkData()
@@ -249,7 +226,8 @@ def process_audio_files(base_dir: str, output_dir: str = "output", batch_size: i
             
             all_results.append({
                 "audio_filepath": chunk.filepath,
-                "text": chunk.get_formatted_text()
+                "text": chunk.get_formatted_text(),
+                "duration": duration
             })
             
             processed_count += 1
@@ -272,8 +250,8 @@ def process_audio_files(base_dir: str, output_dir: str = "output", batch_size: i
         print("\nNo remaining results to save")
 
 if __name__ == "__main__":
-    base_dir = "/external3/databases/ps_data1"
-    output_dir = "/external2/datasets/json_data/people_speech"
+    base_dir = "/external2/datasets/pq"
+    output_dir = "/external4/datasets/jsonl_data"
     
     print(f"Processing files from base directory: {base_dir}")
     print(f"Saving output to: {output_dir}")

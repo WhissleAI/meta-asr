@@ -154,7 +154,7 @@ def get_transcription(text_file: str) -> str:
         print(f"Error reading transcription file {text_file}: {str(e)}")
         return ""
 
-def process_audio_files(base_dir: str, output_dir: str = "output", batch_size: int = 50000) -> None:
+def process_audio_files(base_dir: str, output_dir: str = "output", batch_size: int = 20000) -> None:
     """Process audio files and their corresponding transcriptions."""
     os.makedirs(output_dir, exist_ok=True)
     

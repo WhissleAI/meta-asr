@@ -163,7 +163,7 @@ def process_jsonl_file(input_path, output_path, batch_size=10):
     print(f"\nProcessing complete. Output saved to: {output_path}")
 
 if __name__ == "__main__":
-    input_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Data-store/portuguese/porteguese_data_processed.jsonl"
-    output_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/gemini_metadata/portetuge.jsonl"
+    input_jsonl_path = "/external4/datasets/jsonl_data/euro/french_cv.jsonl"
+    output_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/gemini_metadata/europeen/cv/portetuge.jsonl"
 
     process_jsonl_file(input_jsonl_path, output_jsonl_path)

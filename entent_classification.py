@@ -117,7 +117,7 @@ Sentences to Annotate:
 '''
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         response = model.generate_content(prompt)
         assistant_reply = response.text.strip()
 
@@ -183,8 +183,8 @@ def process_jsonl_file(input_path, output_path, batch_size=10):
     print(f"\nProcessing complete. Output saved to: {output_path}")
 
 if __name__ == "__main__":
-    input_jsonl_path = "/external2/datasets/json_data/people_speech2/remaining_part.jsonl"
+    input_jsonl_path = "/hydra2-prev/home/compute/workspace_himanshu/Processed_Data/results/transcriptions_using_gem_audio_text_pairs.jsonl"
     output_jsonl_path = "/external2/datasets/json_data/people_speech2/people_speech_gem2.jsonl"
 
-    process_jsonl_file(input_jsonl_path, output_jsonl_path)
+    process_jsonl_file(input_jsonl_path, output_jsonl_path) 
     

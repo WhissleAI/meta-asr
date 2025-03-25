@@ -7,6 +7,8 @@ import torch.nn as nn
 from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
 from transformers import Wav2Vec2Processor, Wav2Vec2PreTrainedModel, Wav2Vec2Model
 from typing import Dict, List, Any
+import soundfile as sf
+import resampy
 
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
@@ -39,8 +41,11 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         hidden_states = outputs[0]
         hidden_states = torch.mean(hidden_states, dim=1)
         logits_age = self.age(hidden_states)
-        logits_gender = torch.softmax(self.gender(hidden_states), dim=1)
+        logits_gender = self.softmax(self.gender(hidden_states), dim=1)
         return hidden_states, logits_age, logits_gender
+
+    def softmax(self, x, dim=1): #added softmax function here
+        return torch.nn.functional.softmax(x, dim=dim)
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -71,7 +76,7 @@ def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000) -> str:
     model_name = "superb/hubert-large-superb-er"
 
     if not hasattr(extract_emotion, 'model'):
-        extract_emotion.model = AutoModelForAudioClassification.from_pretrained(model_name)
+        extract_emotion.model = AutoModelForAudioClassification.from_pretrained(model_name).to(device)  # Move model to device
         extract_emotion.feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
 
     if audio_data is None or len(audio_data) == 0:
@@ -86,8 +91,10 @@ def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000) -> str:
             return_tensors="pt",
             padding=True
     )
+    inputs = {k: v.to(device) for k, v in inputs.items()}  # Move inputs to device
 
-    outputs = extract_emotion.model(**inputs)
+    with torch.no_grad():  # Ensure no gradients are calculated
+        outputs = extract_emotion.model(**inputs)
     predicted_class_idx = outputs.logits.argmax(-1).item()
 
     return extract_emotion.model.config.id2label.get(predicted_class_idx, "Unknown")
@@ -118,104 +125,102 @@ def process_txt_data(
     results_dir = os.path.abspath(os.path.join(output_base_dir, "results"))
     os.makedirs(results_dir, exist_ok=True)
 
-    all_data = []
+    jsonl_path_output = os.path.join(results_dir, f"{os.path.splitext(os.path.basename(txt_path))[0]}_processed_data.jsonl")
+    audio_text_jsonl_path = os.path.join(results_dir, f"{os.path.splitext(os.path.basename(txt_path))[0]}_audio_text_pairs.jsonl")
 
-    try:
-        with open(txt_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line or '|' not in line:
-                    continue
+    # Open files for writing *before* the loop
+    with open(jsonl_path_output, 'w', encoding='utf-8') as f_jsonl, \
+         open(audio_text_jsonl_path, 'w', encoding='utf-8') as f_audio_text:
 
-                parts = line.split('|', 1)
-                if len(parts) != 2:
-                    print(f"Invalid line format: {line}")
-                    continue
+        try:
+            with open(txt_path, 'r') as f:
+                for line_num, line in enumerate(f, 1):  # Keep track of line number
+                    line = line.strip()
+                    if not line or '|' not in line:
+                        print(f"Skipping invalid line (line {line_num}): {line}")
+                        continue
 
-                audio_path = parts[0].strip()
-                provided_text = parts[1].strip()
+                    parts = line.split('|', 1)
+                    if len(parts) != 2:
+                        print(f"Skipping invalid line format (line {line_num}): {line}")
+                        continue
 
-                if not os.path.exists(audio_path):
-                    print(f"Audio file not found: {audio_path}")
-                    continue
+                    audio_path = parts[0].strip()
+                    provided_text = parts[1].strip()
 
-                try:
-                    import soundfile as sf
-                    signal, sr = sf.read(audio_path)
-                    if sr != 16000:
-                        import resampy
-                        signal = resampy.resample(signal, sr, 16000)
-                        sr = 16000
-                except Exception as e:
-                    print(f"Error loading audio file {audio_path}: {str(e)}")
-                    continue
-
-                try:
-                    y = processor(signal, sampling_rate=sr)
-                    y = y['input_values'][0]
-                    y = y.reshape(1, -1)
-                    y = torch.from_numpy(y).to(device)
-
-                    with torch.no_grad():
-                        model_output = model(y)
-                        age = float(model_output[1].detach().cpu().numpy()[0][0])
-                        gender = np.argmax(model_output[2].detach().cpu().numpy())
+                    if not os.path.exists(audio_path):
+                        print(f"Audio file not found (line {line_num}): {audio_path}")
+                        continue
 
                     try:
-                        emotion = extract_emotion(signal)
+                        signal, sr = sf.read(audio_path)
+                        if sr != 16000:
+                            signal = resampy.resample(signal, sr, 16000)
+                            sr = 16000
                     except Exception as e:
-                        print(f"Error extracting emotion: {str(e)}")
-                        emotion = "Unknown"
+                        print(f"Error loading audio file (line {line_num}) {audio_path}: {str(e)}")
+                        continue
 
-                    age_bucket = get_age_bucket(age)
-                    gender_text = "MALE" if gender == 1 else "FEMALE"
+                    try:
+                        y = processor(signal, sampling_rate=sr)
+                        y = y['input_values'][0]
+                        y = y.reshape(1, -1)
+                        y = torch.from_numpy(y).to(device)
 
-                    emotion_text = emotion.upper().replace(" ", "_")
-                    metadata = f"AGE_{age_bucket} GENDER_{gender_text} EMOTION_{emotion_text}"
+                        with torch.no_grad():
+                            model_output = model(y)
+                            age = float(model_output[1].detach().cpu().numpy()[0][0])
+                            gender = np.argmax(model_output[2].detach().cpu().numpy())
 
-                    segment_data = {
-                        'audio_file_path': os.path.abspath(audio_path),
-                        'transcription': provided_text,
-                        'age': float(age),
-                        'age_bucket': age_bucket,
-                        'gender': int(gender),
-                        'gender_text': gender_text,
-                        'emotion': emotion,
-                        'formatted_text': f"{provided_text} {metadata}"
-                    }
+                        try:
+                            emotion = extract_emotion(signal, sampling_rate=sr)
+                        except Exception as e:
+                            print(f"Error extracting emotion (line {line_num}) for {audio_path}: {str(e)}")
+                            emotion = "Unknown"
 
-                    all_data.append(segment_data)
 
-                except Exception as e:
-                    print(f"Error processing audio file {audio_path}: {str(e)}")
-                    continue
+                        age_bucket = get_age_bucket(age)
+                        gender_text = "MALE" if gender == 1 else "FEMALE"
 
-        if all_data:
-            jsonl_path_output = os.path.join(results_dir, f"{os.path.splitext(os.path.basename(txt_path))[0]}_processed_data.jsonl")
-            with open(jsonl_path_output, 'w', encoding='utf-8') as f:
-                for item in all_data:
-                    f.write(json.dumps(item, ensure_ascii=False) + '\n')
-            print(f"Saved JSONL to: {jsonl_path_output}")
+                        emotion_text = emotion.upper().replace(" ", "_")
+                        metadata = f"AGE_{age_bucket} GENDER_{gender_text} EMOTION_{emotion_text}"
 
-            audio_text_pairs = [
-                {
-                    "audio_filepath": item['audio_file_path'],
-                    "text": item['formatted_text']
-                }
-                for item in all_data
-            ]
+                        segment_data = {
+                            'audio_file_path': os.path.abspath(audio_path),
+                            'transcription': provided_text,
+                            'age': float(age),
+                            'age_bucket': age_bucket,
+                            'gender': int(gender),
+                            'gender_text': gender_text,
+                            'emotion': emotion,
+                            'formatted_text': f"{provided_text} {metadata}"
+                        }
 
-            audio_text_jsonl_path = os.path.join(results_dir, f"{os.path.splitext(os.path.basename(txt_path))[0]}_audio_text_pairs.jsonl")
-            with open(audio_text_jsonl_path, 'w', encoding='utf-8') as f:
-                for item in audio_text_pairs:
-                    f.write(json.dumps(item, ensure_ascii=False) + '\n')
-            print(f"Saved audio-text pairs JSONL to: {audio_text_jsonl_path}")
+                        # Write to the first JSONL file
+                        f_jsonl.write(json.dumps(segment_data, ensure_ascii=False) + '\n')
 
-        return all_data
+                        audio_text_pair = {
+                            "audio_filepath": segment_data['audio_file_path'],
+                            "text": segment_data['formatted_text']
+                        }
 
-    except Exception as e:
-        print(f"Error processing TXT file {txt_path}: {str(e)}")
-        return []
+                        # Write to the second JSONL file
+                        f_audio_text.write(json.dumps(audio_text_pair, ensure_ascii=False) + '\n')
+
+                        print(f"Processed and saved data for (line {line_num}): {audio_path}")
+
+                    except Exception as e:
+                        print(f"Error processing audio file (line {line_num}) {audio_path}: {str(e)}")
+                        continue
+
+            print(f"Saved processed data to: {jsonl_path_output}")
+            print(f"Saved audio-text pairs to: {audio_text_jsonl_path}")
+            return [] #returns empty list as we dont want to save it to a list and then save it
+
+
+        except Exception as e:
+            print(f"Error processing TXT file {txt_path}: {str(e)}")
+            return [] # Return empty list in case of file-level errors
 
 
 if __name__ == "__main__":
@@ -230,6 +235,6 @@ if __name__ == "__main__":
         print(f"\nProcessing txt file: {input_txt_path}")
         data = process_txt_data(input_txt_path, output_base_dir=output_dir)
         print(f"Successfully processed {input_txt_path}")
-        print(f"Processed {len(data)} audio segments")
+        #print(f"Processed {len(data)} audio segments") # Removed as data will be empty now.
     else:
         print(f"Error: {input_txt_path} is not a valid TXT file path.")

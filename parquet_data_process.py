@@ -52,7 +52,7 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         logits_gender = torch.softmax(self.gender(hidden_states), dim=1)
         return hidden_states, logits_age, logits_gender
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
 processor = Wav2Vec2Processor.from_pretrained(model_name)
 model = AgeGenderModel.from_pretrained(model_name).to(device)

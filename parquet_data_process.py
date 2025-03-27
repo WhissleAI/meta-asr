@@ -1,4 +1,5 @@
 import os
+import gc
 import json
 import torch
 import librosa
@@ -16,7 +17,8 @@ from transformers import (
     Wav2Vec2PreTrainedModel
 )
 import torch.nn as nn
-
+torch.cuda.empty_cache()
+torch.backends.cuda.max_split_size_mb = 512
 load_dotenv()
 
 class ModelHead(nn.Module):
@@ -52,7 +54,7 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         logits_gender = torch.softmax(self.gender(hidden_states), dim=1)
         return hidden_states, logits_age, logits_gender
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0")
 model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
 processor = Wav2Vec2Processor.from_pretrained(model_name)
 model = AgeGenderModel.from_pretrained(model_name).to(device)
@@ -61,7 +63,8 @@ def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000) -> str:
     model_name = "superb/hubert-large-superb-er"
         
     if not hasattr(extract_emotion, 'model'):
-        extract_emotion.model = AutoModelForAudioClassification.from_pretrained(model_name)
+        extract_emotion.model = AutoModelForAudioClassification.from_pretrained(model_name).to(device)
+        extract_emotion.model.eval()
         extract_emotion.feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
         
     if audio_data is None or len(audio_data) == 0:
@@ -76,8 +79,12 @@ def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000) -> str:
         return_tensors="pt", 
         padding=True
     )
+    
+    # Move inputs to GPU
+    inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
 
-    outputs = extract_emotion.model(**inputs)
+    with torch.no_grad():
+        outputs = extract_emotion.model(**inputs)
     predicted_class_idx = outputs.logits.argmax(-1).item()
         
     return extract_emotion.model.config.id2label.get(predicted_class_idx, "Unknown")
@@ -181,7 +188,8 @@ def process_audio_files(base_dir: str, output_dir: str = "output", batch_size: i
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(results, f, indent=2, ensure_ascii=False)
             print(f"\nSaved batch {batch_num} with {len(results)} entries to: {json_path}")
-    
+            torch.cuda.empty_cache()
+            gc.collect()
     for audio_path, text_path in file_pairs:
         try:
             transcription = get_transcription(text_path)
@@ -199,13 +207,15 @@ def process_audio_files(base_dir: str, output_dir: str = "output", batch_size: i
             y = processor(signal, sampling_rate=sr)
             y = y['input_values'][0]
             y = y.reshape(1, -1)
-            y = torch.from_numpy(y).to(device)
+            # Move tensor to GPU properly
+            y = torch.tensor(y, dtype=torch.float32).to(device)
 
             with torch.no_grad():
                 model_output = model(y)
                 age = float(model_output[1].detach().cpu().numpy()[0][0])
                 gender = np.argmax(model_output[2].detach().cpu().numpy())
 
+            # Move emotion extraction to GPU as well
             emotion = extract_emotion(signal)
             
             segment_data = AudioSegment(

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Processing API Client</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            line-height: 1.6;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 700px;
+            margin: auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        h1, h2 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box; /* Prevents padding from increasing width */
+        }
+        .model-selection {
+            margin-bottom: 20px;
+            border: 1px solid #eee;
+            padding: 15px;
+            border-radius: 4px;
+            background-color: #fafafa;
+        }
+        .model-columns {
+            display: flex; /* Enable Flexbox */
+            gap: 20px; /* Space between columns */
+        }
+        .model-column {
+            flex: 1; /* Each column takes equal space */
+            border: 1px dashed #ddd;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .model-column label {
+            display: flex; /* Align radio button and text */
+            align-items: center;
+            cursor: pointer;
+            font-weight: normal; /* Override bold */
+        }
+         .model-column input[type="radio"] {
+            margin-right: 8px;
+            cursor: pointer;
+         }
+
+        button {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #responseArea {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background-color: #e9e9e9;
+            white-space: pre-wrap; /* Preserve formatting */
+            word-wrap: break-word; /* Break long lines */
+            font-family: monospace;
+            min-height: 50px;
+        }
+        .loading {
+            text-align: center;
+            color: #555;
+            font-style: italic;
+        }
+        .success {
+            border-color: #28a745;
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            border-color: #dc3545;
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Audio Processing</h1>
+
+        <form id="processForm">
+            <div class="form-group">
+                <label for="directoryPath">Directory Path (Absolute Path on Server):</label>
+                <input type="text" id="directoryPath" name="directory_path" placeholder="/path/to/your/audio/files" required>
+                 <small><i>Note: This must be an absolute path accessible by the server running the API.</i></small>
+            </div>
+
+             <div class="form-group">
+                <label for="outputPath">Output JSONL File Path (Absolute Path on Server):</label>
+                <input type="text" id="outputPath" name="output_jsonl_path" placeholder="/path/to/your/output/results.jsonl" required>
+                 <small><i>Note: This must be an absolute path accessible by the server running the API. The directory must exist.</i></small>
+            </div>
+
+            <div class="model-selection">
+                <h2>Select Transcription Model</h2>
+                 <p style="text-align: center; margin-top: -10px; margin-bottom: 15px;">Choose which model to use for audio transcription.</p>
+                <div class="model-columns">
+                    <!-- Column 1: Whissle -->
+                    <div class="model-column">
+                        <h3>Whissle</h3>
+                        <label>
+                            <input type="radio" id="modelWhissle" name="model_choice" value="whissle" required>
+                            Use Whissle Model
+                        </label>
+                        <p><small>Requires Whissle SDK and WHISSLE_AUTH_TOKEN configured on the server.</small></p>
+                    </div>
+
+                    <!-- Column 2: Gemini -->
+                    <div class="model-column">
+                        <h3>Gemini</h3>
+                         <label>
+                            <input type="radio" id="modelGemini" name="model_choice" value="gemini" checked required> <!-- Default checked -->
+                            Use Gemini Model
+                        </label>
+                        <p><small>Requires GOOGLE_API_KEY configured on the server.</small></p>
+                    </div>
+                </div>
+            </div>
+
+
+            <button type="submit">Process Audio Files</button>
+        </form>
+
+        <div id="responseArea">
+            API response will appear here...
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('processForm');
+        const responseArea = document.getElementById('responseArea');
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault(); // Prevent default page reload
+
+            // Clear previous response and show loading state
+            responseArea.textContent = 'Processing... Please wait.';
+            responseArea.className = 'loading'; // Reset classes and add loading
+
+            // Get form data
+            const formData = new FormData(form);
+            const data = {};
+            formData.forEach((value, key) => {
+                data[key] = value;
+            });
+
+            console.log("Sending data:", data); // Log data being sent
+
+            const apiUrl = '/process_audio_directory/'; // Relative URL to your API endpoint
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json' // Explicitly accept JSON response
+                    },
+                    body: JSON.stringify(data) // Send data as JSON
+                });
+
+                const result = await response.json(); // Try to parse JSON response
+
+                console.log("Received response:", response.status, result);
+
+                // Clear loading text before showing response
+                responseArea.textContent = '';
+
+                if (response.ok) {
+                    // Success
+                    responseArea.className = 'success'; // Add success class
+                    responseArea.textContent = `Status: ${response.status}\n\nResponse:\n${JSON.stringify(result, null, 2)}`;
+                } else {
+                    // Handle HTTP errors (e.g., 4xx, 5xx)
+                    responseArea.className = 'error'; // Add error class
+                    let errorMessage = `Error: ${response.status} ${response.statusText}\n\n`;
+                    // FastAPI often returns error details in the JSON body
+                    if (result && result.detail) {
+                         // Handle FastAPI's HTTPException detail (can be string or object)
+                        if (typeof result.detail === 'string') {
+                             errorMessage += `Detail: ${result.detail}`;
+                        } else if (Array.isArray(result.detail)) {
+                             errorMessage += `Details:\n${result.detail.map(e => `  - ${e.loc ? e.loc.join(' -> ') + ': ' : ''}${e.msg}`).join('\n')}`;
+                        } else if (typeof result.detail === 'object'){
+                             errorMessage += `Detail: ${JSON.stringify(result.detail, null, 2)}`;
+                        } else {
+                             errorMessage += `Response Body: ${JSON.stringify(result, null, 2)}`;
+                        }
+                    } else {
+                        errorMessage += `Response Body: ${JSON.stringify(result, null, 2)}`; // Show raw body if detail missing
+                    }
+                     responseArea.textContent = errorMessage;
+                }
+
+            } catch (error) {
+                console.error("Fetch Error:", error);
+                responseArea.textContent = ''; // Clear loading text
+                responseArea.className = 'error'; // Add error class
+                responseArea.textContent = `Network or Client-Side Error:\n${error.message}\n\nCheck the browser console and ensure the API server is running and accessible at ${apiUrl}.`;
+            }
+        });
+    </script>
+
+</body>
+</html>

@@ -97,9 +97,6 @@ def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000, model_in
         return "ErrorLoadingModel"
     if audio_data is None or len(audio_data) == 0:
         return "No_Audio"
-    # Limit minimum length check if needed, currently allows short audio
-    # if len(audio_data) < sampling_rate * 0.1:
-    #     return "Audio_Too_Short"
 
     try:
         inputs = model_info['feature_extractor'](
@@ -174,9 +171,6 @@ def get_file_pairs(audio_dir: str, text_dir: str) -> List[Tuple[str, str]]:
                 pairs.append((audio_path, text_files[base_name]))
             else:
                 missing_text_count += 1
-                # Optional: log only a few missing ones to avoid clutter
-                # if missing_text_count < 5:
-                #    print(f"Debug: No matching text file found for {os.path.basename(audio_path)}")
         if missing_text_count > 0:
             print(f"Warning: Found {missing_text_count} audio files without matching text files.")
 
@@ -194,6 +188,7 @@ def get_file_pairs(audio_dir: str, text_dir: str) -> List[Tuple[str, str]]:
         return []
 
 def get_transcription(text_file: str) -> str:
+    """Reads Odia transcription from a text file."""
     try:
         # *** CRITICAL: Ensure UTF-8 for Odia script ***
         with open(text_file, 'r', encoding='utf-8') as f:
@@ -222,53 +217,64 @@ def correct_entity_tag_spaces(text: str) -> str:
 
 def fix_end_tags_and_spacing(text: str) -> str:
     """
-    Cleans up END tags and fixes spacing around tags and common Odia punctuation.
-    Accounts for Odia danda (।) and standard punctuation (.).
+    Cleans up AI-generated annotations, focusing on END tag placement,
+    spacing around tags, internal spaces in tag types, and Odia punctuation.
+    Handles Odia script characters via \w in regex.
     """
     if not isinstance(text, str):
         return text
 
-    # 1. Remove spaces within Entity Type names
-    text = correct_entity_tag_spaces(text)
+    # --- Pre-processing ---
+    # 1. Normalize whitespace to single spaces and strip ends
+    text = re.sub(r'\s+', ' ', text).strip()
 
-    # 2. Remove potential leading/trailing whitespace
-    text = text.strip()
+    # --- Tag Structure Correction ---
+    # 2. Fix spaces *within* ENTITY_TYPE names (e.g., "ENTITY_PERSON_ NAM E" -> "ENTITY_PERSON_NAME")
+    def remove_internal_spaces(match):
+        tag_prefix = match.group(1) # e.g., "ENTITY_"
+        tag_body = match.group(2)   # e.g., "PERSON_ NAM E"
+        corrected_body = re.sub(r'\s+', '', tag_body) # Remove all spaces
+        return f"{tag_prefix}{corrected_body}"
+    text = re.sub(r'\b(ENTITY_)([A-Z0-9_]+(?: +[A-Z0-9_]+)+)\b', remove_internal_spaces, text)
 
-    # 3. Normalize whitespace
-    text = re.sub(r'\s+', ' ', text)
+    # 3. Ensure space *after* ENTITY_TAG (if followed by non-space)
+    #    Match the tag AND the following non-space, then reinsert with a space.
+    text = re.sub(r'(\bENTITY_[A-Z0-9_]+)(\S)', r'\1 \2', text)
 
-    # 4. Remove END tags immediately preceding metadata tags or end of string
-    text = re.sub(r'\s+END\s+(\b(?:AGE_|GENDER_|EMOTION_|INTENT_)|$)', r' \1', text)
+    # 4. Ensure space *before* END tag (if preceded by non-space)
+    text = re.sub(r'(\S)(END\b)', r'\1 \2', text)
 
-    # 5. Remove duplicate END tags
-    text = re.sub(r'\s+END\s+END\b', ' END', text)
-    text = re.sub(r'\s+END\s+END\b', ' END', text) # Run twice
+    # 5. Ensure space *after* END tag (if followed by non-space)
+    #    Handle cases like "ENDପରେ" -> "END ପରେ"
+    text = re.sub(r'(\bEND)(\S)', r'\1 \2', text)
 
-    # 6. Ensure ENTITY_TAG<space>text is followed by <space>END
-    pattern_add_end = r'(ENTITY_[A-Z0-9_]+\s+\S.*?)(?<!\sEND)(?=\s+(\bAGE_|\bGENDER_|\bEMOTION_|\bINTENT_|\bENTITY_)|$)'
-    text = re.sub(pattern_add_end, r'\1 END', text)
+    # --- Redundant/Misplaced END Tag Removal ---
+    # 6. Remove duplicate END tags (run twice for overlapping cases like END END END)
+    text = re.sub(r'\bEND\s+END\b', 'END', text)
+    text = re.sub(r'\bEND\s+END\b', 'END', text)
 
-    # 7. Ensure space between tag and text, and text and END
-    text = re.sub(r'(ENTITY_[A-Z0-9_]+)(\S)', r'\1 \2', text) # Space after tag if missing
-    text = re.sub(r'(\S)(END\b)', r'\1 \2', text)        # Space before END if missing
+    # 7. Remove END tag if it immediately precedes metadata or end-of-string
+    #    Allows optional space between END and the metadata/EOF.
+    text = re.sub(r'\bEND\s*(\b(?:AGE_|GENDER_|EMOTION_|INTENT_)|$)', r'\1', text)
+    # Run again in case removing one END revealed another misplaced one
+    text = re.sub(r'\bEND\s*(\b(?:AGE_|GENDER_|EMOTION_|INTENT_)|$)', r'\1', text)
 
-    # 8. Odia/Common punctuation spacing rules (apply last)
-    # Remove space BEFORE specific punctuation (Odia uses । and sometimes .)
-    # *** Added Odia Danda '।' to the regex ***
-    text = re.sub(r'\s+([?!:;,.।])', r'\1', text)
-    # Ensure space AFTER punctuation if followed by a word character (Odia or Latin)
-    # \w includes Unicode letters, covering Odia script characters.
-    # *** Added Odia Danda '।' to the regex ***
-    text = re.sub(r'([?!:;,.।])(\w)', r'\1 \2', text)
 
-    # 9. Final trim and space normalization
+    # --- Final Spacing and Punctuation ---
+    # 8. Odia/Common punctuation spacing rules
+    #    Remove space BEFORE specific punctuation (Including Odia danda ।)
+    text = re.sub(r'\s+([?!:;,.।])', r'\1', text) # Added Odia danda ।
+    #    Ensure space AFTER punctuation if followed by a word character (\w handles Odia script)
+    text = re.sub(r'([?!:;,.।])(\w)', r'\1 \2', text) # Added Odia danda ।
+
+    # 9. Final whitespace normalization and stripping
     text = re.sub(r'\s+', ' ', text).strip()
 
     return text
 
-# *** MODIFIED PROMPT FOR ODIA ***
+# --- MODIFIED AND MORE DETAILED PROMPT FOR ODIA ---
 def annotate_batch_texts(texts_to_annotate: List[str]):
-    """Sends a batch of texts to Gemini for annotation (Prompt adapted for Odia)."""
+    """Sends a batch of texts to Gemini for annotation (Prompt refined for clarity and stricter rules for Odia)."""
     if not genai:
         print("Error: Google Generative AI not configured. Skipping annotation.")
         return texts_to_annotate # Return original texts
@@ -277,172 +283,212 @@ def annotate_batch_texts(texts_to_annotate: List[str]):
 
     # Input texts already have metadata like: "odia text AGE_X GENDER_Y EMOTION_Z"
 
-    # *** ODIA PROMPT STARTS HERE ***
-    prompt = f'''You are an expert linguistic annotator for **Odia** text written in the **Odia** script.
-You will receive a list of Odia sentences. Each sentence already includes metadata tags (AGE_*, GENDER_*, EMOTION_*) at the end.
+    # *** REFINED ODIA PROMPT STARTS HERE ***
+    prompt = f'''You are an expert linguistic annotator specifically for **Odia** text written in the **Odia script**. Your task is to process a list of Odia sentences, each already containing `AGE_*`, `GENDER_*`, and `EMOTION_*` metadata tags at the end. Follow these instructions with extreme precision:
 
-Your task is crucial and requires precision:
-1.  **PRESERVE EXISTING TAGS:** Keep the `AGE_`, `GENDER_`, and `EMOTION_` tags exactly as they appear at the end of each sentence. DO NOT modify or move them.
-2.  **ENTITY ANNOTATION (Odia Text Only):** Identify entities ONLY within the Odia transcription part of the sentence. Use ONLY the entity types from the provided list.
-3.  **ENTITY TAG FORMAT (VERY IMPORTANT):**
-    *   Insert the tag **BEFORE** the entity: `ENTITY_<TYPE>` (e.g., `ENTITY_CITY`, `ENTITY_PERSON_NAME`).
-    *   **NO SPACES** are allowed within the `<TYPE>` part (e.g., use `PERSON_NAME`, NOT `PERSON_ NAM E`).
-    *   Immediately **AFTER** the Odia entity text, add a single space followed by `END`.
-    *   Example: `... ENTITY_CITY କଟକରେ END ...` (using Odia script for Cuttack)
-    *   **DO NOT** add an `END` tag just before the `AGE_`, `GENDER_`, `EMOTION_` tags unless it belongs to a preceding entity.
-4.  **INTENT TAG:** Determine the single primary intent of the Odia transcription (e.g., INFORM, QUESTION, REQUEST, COMMAND, GREETING, etc.). Add ONE `INTENT_<INTENT_TYPE>` tag at the absolute end of the entire string, AFTER all other tags.
-5.  **OUTPUT FORMAT:** Return a JSON array of strings, where each string is a fully annotated sentence adhering to all rules.
-6.  **ODIA SPECIFICS:** Handle **Odia script**, punctuation (like the danda `।` or period `.`), and spacing correctly according to standard Odia rules. Ensure proper spacing around the inserted tags.
+1.  **Preserve Existing Metadata Tags:**
+    *   The `AGE_*`, `GENDER_*`, and `EMOTION_*` tags at the end of each sentence **must** remain exactly as they are.
+    *   **Do not** modify, move, delete, or change these existing metadata tags.
 
-**ENTITY TYPES LIST (USE ONLY THESE):**
-[
-    "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",
-    "DATE", "TIME", "DURATION", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "DEADLINE", "DELIVERY_DATE", "DELIVERY_TIME",
-    "EVENT", "MEETING", "TASK", "PROJECT_NAME", "ACTION_ITEM", "PRIORITY", "FEEDBACK", "REVIEW", "RATING", "COMPLAINT",
-    "QUESTION", "RESPONSE", "NOTIFICATION_TYPE", "AGENDA", "REMINDER", "NOTE", "RECORD", "ANNOUNCEMENT", "UPDATE",
-    "SCHEDULE", "BOOKING_REFERENCE", "APPOINTMENT_NUMBER", "ORDER_NUMBER", "INVOICE_NUMBER", "PAYMENT_METHOD",
-    "PAYMENT_AMOUNT", "BANK_NAME", "ACCOUNT_NUMBER", "CREDIT_CARD_NUMBER", "TAX_ID", "SOCIAL_SECURITY_NUMBER",
-    "DRIVER'S_LICENSE", "PASSPORT_NUMBER", "INSURANCE_PROVIDER", "POLICY_NUMBER", "INSURANCE_PLAN", "CLAIM_NUMBER",
-    "POLICY_HOLDER", "BENEFICIARY", "RELATIONSHIP", "EMERGENCY_CONTACT", "PROJECT_PHASE", "VERSION", "DEVELOPMENT_STAGE",
-    "DEVICE_NAME", "OPERATING_SYSTEM", "SOFTWARE_VERSION", "BRAND", "MODEL_NUMBER", "LICENSE_PLATE", "VEHICLE_MAKE",
-    "VEHICLE_MODEL", "VEHICLE_TYPE", "FLIGHT_NUMBER", "HOTEL_NAME", "ROOM_NUMBER", "TRANSACTION_ID", "TICKET_NUMBER",
-    "SEAT_NUMBER", "GATE", "TERMINAL", "TRANSACTION_TYPE", "PAYMENT_STATUS", "PAYMENT_REFERENCE", "INVOICE_STATUS",
-    "SYMPTOM", "DIAGNOSIS", "MEDICATION", "DOSAGE", "ALLERGY", "PRESCRIPTION", "TEST_NAME", "TEST_RESULT", "MEDICAL_RECORD",
-    "HEALTH_STATUS", "HEALTH_METRIC", "VITAL_SIGN", "DOCTOR_NAME", "HOSPITAL_NAME", "DEPARTMENT", "WARD", "CLINIC_NAME",
-    "WEBSITE", "URL", "IP_ADDRESS", "MAC_ADDRESS", "USERNAME", "PASSWORD", "LANGUAGE", "CODE_SNIPPET", "DATABASE_NAME",
-    "API_KEY", "WEB_TOKEN", "URL_PARAMETER", "SERVER_NAME", "ENDPOINT", "DOMAIN"
-]
+2.  **Entity Annotation (Odia Text Only):**
+    *   Identify entities **only** within the main Odia transcription part of the sentence (before the metadata).
+    *   Use **only** the entity types provided in the `Allowed ENTITY TYPES` list below. Do not invent new types.
 
-**Example Input String (Odia):**
-"ମୁଁ କାଲି ମାରିଆଙ୍କୁ କଟକରେ ଦେଖିବି। AGE_30_45 GENDER_FEMALE EMOTION_NEUTRAL"
+3.  **Strict Entity Tagging Format:**
+    *   **Tag Insertion:** Place the entity tag **immediately before** the identified Odia entity text. The tag format is `ENTITY_<TYPE>` (e.g., `ENTITY_CITY`, `ENTITY_PERSON_NAME`).
+    *   **NO SPACES IN TYPE:** Ensure the `<TYPE>` part of the tag contains **no spaces** (e.g., `PERSON_NAME` is correct, `PERSON_ NAM E` is **incorrect**).
+    *   **`END` Tag Placement:** Place the literal string `END` **immediately after** the *complete* Odia entity text.
+    *   **Spacing:** There must be exactly **one space** between the `ENTITY_<TYPE>` tag and the start of the entity text. There must be exactly **one space** between the end of the entity text and the `END` tag. There must be exactly **one space** after the `END` tag before the next word begins (unless followed by punctuation).
+    *   **Example:** For the entity "ଭୁବନେଶ୍ୱରରେ", the correct annotation is `ENTITY_CITY ଭୁବନେଶ୍ୱରରେ END`.
+    *   **Crucial `END` Rule:** Only add **one** `END` tag right after the full entity phrase. Do **not** add `END` tags after individual words within a multi-word entity or after words that simply follow an entity.
+    *   **Avoid Extra `END` Before Metadata:** Do **not** place an `END` tag just before the `AGE_`, `GENDER_`, `EMOTION_`, or `INTENT_` tags unless that `END` tag correctly marks the end of an immediately preceding entity.
 
-**CORRECT Example Output String (Odia):**
-"ମୁଁ କାଲି ENTITY_PERSON_NAME ମାରିଆ END ଙ୍କୁ ENTITY_CITY କଟକରେ END ଦେଖିବି। AGE_30_45 GENDER_FEMALE EMOTION_NEUTRAL INTENT_INFORM"
+4.  **Intent Tag:**
+    *   Determine the single primary intent of the Odia sentence (e.g., `INFORM`, `QUESTION`, `REQUEST`, `COMMAND`, `GREETING`).
+    *   Append **one** `INTENT_<INTENT_TYPE>` tag at the **absolute end** of the entire string, after all other tags (`AGE_`, `GENDER_`, `EMOTION_`).
 
-**INCORRECT Example Output String (Spaces in Tag):**
-"ମୁଁ କାଲି ENTITY_PERSON_ NAM E ମାରିଆ END ଙ୍କୁ ENTITY_CIT Y କଟକରେ END ଦେଖିବି। AGE_30_45 GENDER_FEMALE EMOTION_NEUTRAL INTENT_INFORM"
+5.  **Output Format:**
+    *   Return a **JSON array** of strings. Each string must be a fully annotated sentence following all the rules above.
 
-**INCORRECT Example Output String (Extra END before metadata):**
-"ମୁଁ କାଲି ENTITY_PERSON_NAME ମାରିଆ END ଙ୍କୁ ENTITY_CITY କଟକରେ END ଦେଖିବି। END AGE_30_45 GENDER_FEMALE EMOTION_NEUTRAL INTENT_INFORM"
+6.  **Odia Language Specifics:**
+    *   Handle Odia script correctly.
+    *   Ensure correct spacing around Odia punctuation (like `.`, `?`, `!`, `।`). Remove space before punctuation, ensure space after punctuation if followed by a word.
+    *   The final output string must be clean, with single spaces separating words and tags according to the rules.
 
+**Allowed ENTITY TYPES (Use Only These):**
+    [ "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE", "DATE",
+    "TIME", "DURATION", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "DEADLINE", "DELIVERY_DATE", "DELIVERY_TIME", "EVENT", "MEETING",
+    "TASK", "PROJECT_NAME", "ACTION_ITEM", "PRIORITY", "FEEDBACK", "REVIEW", "RATING", "COMPLAINT", "QUESTION", "RESPONSE", "NOTIFICATION_TYPE", "AGENDA",
+    "REMINDER", "NOTE", "RECORD", "ANNOUNCEMENT", "UPDATE", "SCHEDULE", "BOOKING_REFERENCE", "APPOINTMENT_NUMBER", "ORDER_NUMBER", "INVOICE_NUMBER", "PAYMENT_METHOD", "PAYMENT_AMOUNT", "BANK_NAME", "ACCOUNT_NUMBER", "CREDIT_CARD_NUMBER", "TAX_ID", "SOCIAL_SECURITY_NUMBER", "DRIVER'S_LICENSE", "PASSPORT_NUMBER", "INSURANCE_PROVIDER", "POLICY_NUMBER", "INSURANCE_PLAN", "CLAIM_NUMBER", "POLICY_HOLDER", "BENEFICIARY",
+    "RELATIONSHIP", "EMERGENCY_CONTACT", "PROJECT_PHASE", "VERSION", "DEVELOPMENT_STAGE", "DEVICE_NAME", "OPERATING_SYSTEM", "SOFTWARE_VERSION", "BRAND", "MODEL_NUMBER", "LICENSE_PLATE", "VEHICLE_MAKE", "VEHICLE_MODEL", "VEHICLE_TYPE", "FLIGHT_NUMBER", "HOTEL_NAME", "ROOM_NUMBER", "TRANSACTION_ID", "TICKET_NUMBER", "SEAT_NUMBER", "GATE", "TERMINAL", "TRANSACTION_TYPE", "PAYMENT_STATUS", "PAYMENT_REFERENCE", "INVOICE_STATUS",
+    "SYMPTOM", "DIAGNOSIS", "MEDICATION", "DOSAGE", "ALLERGY", "PRESCRIPTION", "TEST_NAME", "TEST_RESULT", "MEDICAL_RECORD", "HEALTH_STATUS", "HEALTH_METRIC", "VITAL_SIGN", "DOCTOR_NAME", "HOSPITAL_NAME", "DEPARTMENT", "WARD", "CLINIC_NAME", "WEBSITE", "URL", "IP_ADDRESS", "MAC_ADDRESS", "USERNAME", "PASSWORD", "LANGUAGE", "CODE_SNIPPET", "DATABASE_NAME", "API_KEY", "WEB_TOKEN", "URL_PARAMETER", "SERVER_NAME", "ENDPOINT", "DOMAIN" ]
+
+**Examples Demonstrating Correct Formatting (Odia):**
+
+*   **Input:** `"ମୁଁ କାଲି ମାରିଆଙ୍କୁ ଭୁବନେଶ୍ୱରରେ ଭେଟିବି । AGE_30_45 GENDER_FEMALE EMOTION_NEUTRAL"`
+*   **Correct Output:** `"ମୁଁ କାଲି ENTITY_PERSON_NAME ମାରିଆ END ଙ୍କୁ ENTITY_CITY ଭୁବନେଶ୍ୱର END ରେ ଭେଟିବି । AGE_30_45 GENDER_FEMALE EMOTION_NEUTRAL INTENT_INFORM"`
+
+*   **Input:** `"ସିବିଆଇର ଏହି ସବୁ ଯୁକ୍ତିକୁ ମାଡ୍ରାସ କୋର୍ଟର ବିଚାରପତି ପ୍ରକାଶ ଖାରଜ କରିଦେଇଛନ୍ତି । AGE_30_45 GENDER_MALE EMOTION_NEUTRAL"`
+*   **Correct Output:** `"ENTITY_ORGANIZATION ସିବିଆଇ END ର ଏହି ସବୁ ଯୁକ୍ତିକୁ ENTITY_LOCATION ମାଡ୍ରାସ END କୋର୍ଟର ବିଚାରପତି ENTITY_PERSON_NAME ପ୍ରକାଶ END ଖାରଜ କରିଦେଇଛନ୍ତି । AGE_30_45 GENDER_MALE EMOTION_NEUTRAL INTENT_INFORM"`
+    *(Note: Assuming "ମାଡ୍ରାସ" is the location and "ପ୍ରକାଶ" is the person's name. Also note the space after each `END`)*
+
+*   **Input:** `"ମୋ ଜନ୍ମଦିନ ୧୨ ଡିସେମ୍ବରରେ । AGE_18_30 GENDER_MALE EMOTION_HAPPY"`
+*   **Correct Output:** `"ମୋ ଜନ୍ମଦିନ ENTITY_DATE ୧୨ ଡିସେମ୍ବର END ରେ । AGE_18_30 GENDER_MALE EMOTION_HAPPY INTENT_INFORM"`
+
+*   **Input:** `"ଆପଣ ଦୟାକରି ଶାନ୍ତ ରହିବେ କି? AGE_45_60 GENDER_FEMALE EMOTION_ANNOYED"`
+*   **Correct Output:** `"ଆପଣ ଦୟାକରି ଶାନ୍ତ ରହିବେ କି? AGE_45_60 GENDER_FEMALE EMOTION_ANNOYED INTENT_REQUEST"`
+
+**Incorrect Examples (Common Mistakes to Avoid):**
+*   `... ENTITY_PERSON_ NAM E ମାରିଆ END ...` (Space in TYPE)
+*   `... ENTITY_CITY ଭୁବନେଶ୍ୱରEND ...` (Missing space before END)
+*   `... ENTITY_CITY ଭୁବନେଶ୍ୱର ENDରେ ...` (Missing space after END)
+*   `... କରିଦେଇଛନ୍ତି END AGE_...` (Unnecessary END before metadata)
+*   `... ବିଚାରପତି END ପ୍ରକାଶ END ...` (Incorrectly adding END after non-entity words)
+
+Provide only the JSON array containing the correctly annotated sentences based precisely on these instructions.
 
 **Sentences to Annotate Now:**
 {json.dumps(texts_to_annotate, ensure_ascii=False, indent=2)}
 '''
-    # *** ODIA PROMPT ENDS HERE ***
+    # *** REFINED ODIA PROMPT ENDS HERE ***
 
     max_retries = 3
     retry_delay = 5 # seconds
     for attempt in range(max_retries):
         try:
-            model = genai.GenerativeModel("gemini-1.5-flash-latest") # Or "gemini-1.5-pro-latest" for potentially better quality
-            # Consider adding safety settings if needed (same as before)
+            # Using a potentially more capable model might help adherence
+            # model = genai.GenerativeModel("gemini-1.5-pro-latest")
+            model = genai.GenerativeModel("gemini-1.5-flash-latest") # Keep flash for speed unless pro is needed
+
+            # Optional: Configure safety settings if needed
             # safety_settings = [...]
             # response = model.generate_content(prompt, safety_settings=safety_settings)
             response = model.generate_content(prompt)
 
-            # Debug: Print raw response if needed
-            # print(f"--- Raw Gemini Response (Attempt {attempt+1}) ---")
-            # print(response.text)
-            # print("-------------------------")
 
             assistant_reply = response.text.strip()
 
-            # Handle potential markdown code block formatting
-            if assistant_reply.startswith("```json"):
-                assistant_reply = assistant_reply[len("```json"):].strip()
-            elif assistant_reply.startswith("```"):
-                 assistant_reply = assistant_reply[len("```"):].strip()
-            if assistant_reply.endswith("```"):
-                assistant_reply = assistant_reply[:-len("```")].strip()
+            # --- Robust JSON Extraction ---
+            # Try to find the JSON block even if there's surrounding text/markdown
+            json_match = re.search(r'\[.*\]', assistant_reply, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                print(f"Debug: Extracted JSON string (length {len(json_str)})") # Debug print
+            else:
+                # Handle markdown code blocks if JSON wasn't found directly
+                if assistant_reply.startswith("```json"):
+                    assistant_reply = assistant_reply[len("```json"):].strip()
+                elif assistant_reply.startswith("```"):
+                     assistant_reply = assistant_reply[len("```"):].strip()
+                if assistant_reply.endswith("```"):
+                    assistant_reply = assistant_reply[:-len("```")].strip()
 
-            # Basic check if response looks like JSON list
-            if not (assistant_reply.startswith('[') and assistant_reply.endswith(']')):
-                 # Try to extract JSON even if it's not perfectly formatted at start/end
-                 match = re.search(r'\[.*\]', assistant_reply, re.DOTALL)
-                 if match:
-                     print("Warning: Extracted JSON content from potentially malformed response.")
-                     assistant_reply = match.group(0)
-                 else:
+                # Final check if it looks like a list now
+                if assistant_reply.startswith('[') and assistant_reply.endswith(']'):
+                     json_str = assistant_reply
+                     print("Debug: Extracted JSON string after markdown removal") # Debug print
+                else:
+                    # Log the problematic response for debugging
+                    print(f"Error: Could not extract valid JSON list from response (Attempt {attempt+1}). Response snippet:\n---\n{assistant_reply[:500]}\n---")
                     raise json.JSONDecodeError("Response does not appear to contain a JSON list.", assistant_reply, 0)
 
+            # --- JSON Parsing and Post-Processing ---
+            try:
+                annotated_sentences_raw = json.loads(json_str)
+            except json.JSONDecodeError as json_e:
+                print(f"JSON decoding failed specifically on extracted string (Attempt {attempt+1}): {json_e}")
+                print("Extracted string snippet:", json_str[:500])
+                # Raise the error again to trigger retry/fallback
+                raise json_e
 
-            annotated_sentences_raw = json.loads(assistant_reply)
 
             if isinstance(annotated_sentences_raw, list) and len(annotated_sentences_raw) == len(texts_to_annotate):
-                # Apply post-processing fixes robustly
                 processed_sentences = []
-                # original_indices = {text: i for i, text in enumerate(texts_to_annotate)} # Map original text to index (Optional, complex if duplicates exist)
-
                 for idx, sentence in enumerate(annotated_sentences_raw):
                      if isinstance(sentence, str):
-                          # 1. Correct spaces in tags FIRST
-                          corrected_sentence = correct_entity_tag_spaces(sentence)
-                          # 2. Fix END tags and spacing (using Odia-aware function)
-                          final_sentence = fix_end_tags_and_spacing(corrected_sentence)
+                          # Apply the improved fixing function
+                          final_sentence = fix_end_tags_and_spacing(sentence)
                           processed_sentences.append(final_sentence)
+                          # Debug: Compare before/after fix for one example per batch
+                          # if idx == 0 and attempt == 0:
+                          #      print(f"Debug Fix Example:\n  Before: {sentence}\n  After:  {final_sentence}")
                      else:
-                          # Handle non-string elements: Log error and try to use original text
+                          # Handle non-string elements
                           print(f"Warning: Non-string item received in annotation list at index {idx}: {sentence}")
-                          # Find corresponding original text (requires careful handling if duplicates exist)
-                          # This simplistic approach might fail if identical texts are sent in the batch
                           try:
-                              # Find the original text based on the current index in the received list
                               original_text = texts_to_annotate[idx]
-                              processed_sentences.append(original_text + " ANNOTATION_ERROR_NON_STRING")
+                              # Add error marker to original text
+                              processed_sentences.append(fix_end_tags_and_spacing(original_text) + " ANNOTATION_ERROR_NON_STRING")
                           except IndexError:
                               print(f"Error: Could not map non-string item at index {idx} back to original text.")
                               processed_sentences.append("ANNOTATION_ERROR_UNKNOWN_ORIGINAL")
 
-
-                # Extra check: Ensure final list length still matches
+                # Final length check after processing
                 if len(processed_sentences) == len(texts_to_annotate):
+                    print(f"Debug: Batch annotation successful (Attempt {attempt+1}). Lengths match.") # Debug
                     return processed_sentences
                 else:
+                    # This case should ideally not happen if non-strings are handled
                     print(f"Error: Mismatch after processing non-string elements. Expected {len(texts_to_annotate)}, Got {len(processed_sentences)}")
-                    # Fallback to original texts only on the last attempt
                     if attempt == max_retries - 1:
-                        return texts_to_annotate
+                        # Fallback on last attempt
+                        return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_PROCESSING" for t in texts_to_annotate]
                     else:
                         raise ValueError("Processing error lead to length mismatch.") # Force retry
 
             else:
-                print(f"Error: API did not return a valid list or mismatched length. Expected {len(texts_to_annotate)}, Got {len(annotated_sentences_raw) if isinstance(annotated_sentences_raw, list) else 'Invalid Type'}")
-                # Fallback to original texts only on the last attempt
+                # Handle incorrect list length or type from API
+                print(f"Error: API returned invalid list or mismatched length (Attempt {attempt+1}). Expected {len(texts_to_annotate)}, Got {len(annotated_sentences_raw) if isinstance(annotated_sentences_raw, list) else type(annotated_sentences_raw)}")
                 if attempt == max_retries - 1:
-                    return texts_to_annotate
+                    # Fallback on last attempt
+                     return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_API_LENGTH" for t in texts_to_annotate]
                 else:
+                    # No need to raise an error here, loop will continue to retry
                     print(f"Retrying annotation (attempt {attempt + 2}/{max_retries})...")
-                    time.sleep(retry_delay * (attempt + 1)) # Exponential backoff
+                    time.sleep(retry_delay * (attempt + 1))
+
 
         except json.JSONDecodeError as e:
+            # This catches errors from json.loads() if extraction failed or content is invalid
             print(f"JSON decoding failed (Attempt {attempt+1}/{max_retries}): {e}")
-            print("Problematic Raw response snippet:", assistant_reply[:500] if 'assistant_reply' in locals() else "N/A")
-            if attempt == max_retries - 1: return texts_to_annotate
+            # assistant_reply might not be defined if extraction failed early
+            # print("Problematic Raw response snippet:", assistant_reply[:500] if 'assistant_reply' in locals() else "N/A")
+            if attempt == max_retries - 1:
+                 return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_JSON_DECODE" for t in texts_to_annotate]
             print(f"Retrying annotation...")
             time.sleep(retry_delay * (attempt + 1))
         except Exception as e:
-            # Catch potential API errors (rate limits, connection issues, etc.)
+            # Catch other potential errors (API connection, rate limits, etc.)
             print(f"Error calling/processing Generative AI (Attempt {attempt+1}/{max_retries}): {e}")
-            # Check for specific API error types if library provides them
+            import traceback
+            traceback.print_exc() # Print full traceback for unexpected errors
             if "rate limit" in str(e).lower():
                  print("Rate limit likely hit.")
-                 # Increase delay significantly for rate limits
-                 time.sleep(retry_delay * (attempt + 1) * 5)
-            elif "API key not valid" in str(e):
-                 print("FATAL: Invalid Google API Key. Please check your GOOGLE_API_KEY environment variable.")
-                 # No point retrying if key is bad
-                 return texts_to_annotate
+                 time.sleep(retry_delay * (attempt + 1) * 5) # Longer delay for rate limits
+            elif "API key not valid" in str(e) or "permission" in str(e).lower():
+                 print("FATAL: Invalid Google API Key or permission issue. Please check your GOOGLE_API_KEY and API enablement.")
+                 # No point retrying if key/permissions are bad
+                 return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_API_KEY" for t in texts_to_annotate]
             else:
-                 time.sleep(retry_delay * (attempt + 1))
-            if attempt == max_retries - 1: return texts_to_annotate # Fallback on final attempt
+                 time.sleep(retry_delay * (attempt + 1)) # Standard backoff
 
-    # Should not be reached if loop completes, but as a safeguard
-    print("Error: Max retries reached for annotation.")
-    return texts_to_annotate
+            if attempt == max_retries - 1:
+                 return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_API_CALL" for t in texts_to_annotate] # Fallback on final attempt
+
+    # Fallback if max retries are reached without returning
+    print("Error: Max retries reached for annotation batch.")
+    return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_MAX_RETRIES" for t in texts_to_annotate]
 
 
-# --- Main Processing Function (Logic Unchanged, Paths Configurable) ---
+# --- Rest of the script remains the same ---
+
+# --- Data Structures (Unchanged) ---
+# ... (AudioSegment, ChunkData classes) ...
+
+# --- File Handling (Unchanged) ---
+# ... (get_file_pairs, get_transcription functions) ...
+
+# --- Main Processing Function (Corrected for Odia context) ---
 def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size: int = 10) -> None:
     """
     Processes Odia audio files, extracts metadata, gets transcriptions,
@@ -454,17 +500,16 @@ def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size
     # --- Clear output file at the very beginning ---
     try:
         print(f"Attempting to clear output file: {output_jsonl_path}")
-        # *** CRITICAL: Ensure UTF-8 for writing Odia output ***
         with open(output_jsonl_path, 'w', encoding='utf-8') as f_clear:
-            f_clear.write("") # Write empty string to ensure file is cleared/created
+            f_clear.write("")
         print(f"Output file {output_jsonl_path} cleared successfully.")
     except IOError as e:
         print(f"Error clearing output file {output_jsonl_path}: {e}. Please check permissions.")
-        return # Exit if we can't write to the output file
+        return
 
     # --- Load Models ---
     print("Loading models...")
-    # Age/Gender Model (Language Agnostic)
+    # Age/Gender Model
     age_gender_model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
     try:
         processor = Wav2Vec2Processor.from_pretrained(age_gender_model_name)
@@ -475,7 +520,7 @@ def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size
         print(f"FATAL Error loading Age/Gender model: {e}. Exiting.")
         return
 
-    # Emotion Model (Largely Language Agnostic, but monitor performance on Odia)
+    # Emotion Model
     emotion_model_name = "superb/hubert-large-superb-er"
     emotion_model_info = {}
     try:
@@ -485,14 +530,14 @@ def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size
         print("Emotion model loaded.")
     except Exception as e:
         print(f"Error loading Emotion model: {e}. Emotion extraction will use 'ErrorLoadingModel'.")
-        # Allow continuing without emotion model
 
     print("-" * 30)
 
-    # --- Prepare File Paths (Using base_dir for Odia data) ---
+    # --- Prepare File Paths for Odia Data ---
     audio_dir = os.path.join(base_dir, "audio") # Standard subfolder names
     text_dir = os.path.join(base_dir, "text")   # Standard subfolder names
 
+    # Check if directories exist
     if not os.path.exists(audio_dir) or not os.path.exists(text_dir):
         print(f"Error: Audio ({audio_dir}) or text ({text_dir}) directory not found in {base_dir}")
         print("Please ensure your Odia data follows the structure:")
@@ -501,7 +546,7 @@ def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size
         print(f"  └── text/   (contains .txt files with matching basenames, UTF-8 encoded)")
         return
 
-    print(f"Processing Odia files from:\n  Audio: {audio_dir}\n  Text:  {text_dir}") # <-- Changed to Odia
+    print(f"Processing Odia files from:\n  Audio: {audio_dir}\n  Text:  {text_dir}")
     print(f"Output will be saved to: {output_jsonl_path}")
     print("-" * 30)
 
@@ -514,7 +559,7 @@ def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size
     total_files = len(file_pairs)
     print(f"Found {total_files} audio-text pairs to process.")
 
-    processed_records_buffer = [] # Holds records before AI annotation batch
+    processed_records_buffer = []
     batch_num = 0
     files_processed_count = 0
     total_records_saved = 0
@@ -523,59 +568,55 @@ def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size
     for i, (audio_path, text_path) in enumerate(file_pairs):
         print(f"\nProcessing file {i+1}/{total_files}: {os.path.basename(audio_path)}")
         try:
-            # 1. Get Odia Transcription (Ensures UTF-8)
+            # 1. Get Transcription
             transcription = get_transcription(text_path)
             if not transcription:
                 print(f"  Skipping: Empty or unreadable transcription in {text_path}")
                 continue
 
             # 2. Load Audio
+            signal, sr, duration = None, 16000, 0
             try:
-                # Use soundfile for potentially broader codec support
                 try:
-                    signal, sr = sf.read(audio_path, dtype='float32')
+                    signal_raw, sr_orig = sf.read(audio_path, dtype='float32')
                 except Exception as sf_err:
                     print(f"  Soundfile failed ({sf_err}), trying librosa...")
-                    signal, sr = librosa.load(audio_path, sr=None, mono=False) # Load original SR, multi-channel ok for now
+                    signal_raw, sr_orig = librosa.load(audio_path, sr=None, mono=False)
 
-                # Resample to 16kHz if necessary
                 target_sr = 16000
-                if sr != target_sr:
-                    print(f"  Warning: Resampling {os.path.basename(audio_path)} from {sr} Hz to {target_sr} Hz.")
-                    # Ensure signal is float for resampling
-                    signal = signal.astype(np.float32) if not np.issubdtype(signal.dtype, np.floating) else signal
-                    # Handle multi-channel before resampling
-                    if signal.ndim > 1:
-                        signal = np.mean(signal, axis=1) # Simple mixdown to mono
-                    signal = librosa.resample(y=signal, orig_sr=sr, target_sr=target_sr)
+                if sr_orig != target_sr:
+                    # print(f"  Resampling {os.path.basename(audio_path)} from {sr_orig} Hz to {target_sr} Hz.")
+                    signal_float = signal_raw.astype(np.float32) if not np.issubdtype(signal_raw.dtype, np.floating) else signal_raw
+                    if signal_float.ndim > 1: signal_mono = np.mean(signal_float, axis=1)
+                    else: signal_mono = signal_float
+                    signal = librosa.resample(y=signal_mono, orig_sr=sr_orig, target_sr=target_sr)
                     sr = target_sr
+                else:
+                    signal = signal_raw; sr = sr_orig
 
-                # Ensure mono after potential resampling
-                if signal.ndim > 1:
-                     signal = np.mean(signal, axis=1) # Mix down if still stereo after load/resample
+                if signal.ndim > 1: signal = np.mean(signal, axis=1)
 
                 if signal is None or len(signal) == 0:
                     print(f"  Skipping: Failed to load or empty audio in {audio_path}")
                     continue
-                duration = round(len(signal) / sr, 2) # Use target SR
+                duration = round(len(signal) / sr, 2)
                 if duration < 0.1:
-                     print(f"  Skipping: Audio too short ({duration:.2f}s) in {audio_path}")
-                     continue
+                    print(f"  Skipping: Audio too short ({duration:.2f}s) in {audio_path}")
+                    continue
             except Exception as load_err:
                  print(f"  Skipping: Error loading/processing audio {audio_path}: {load_err}")
                  continue
 
             # 3. Extract Age/Gender
+            age, gender = -1.0, "ERROR"
             try:
                 inputs = processor(signal, sampling_rate=sr, return_tensors="pt", padding=True)
-                input_values = inputs.input_values.to(device)
-                # Handle potential long audio causing memory issues
-                max_len_inference = 30 * sr # Limit inference to 30 seconds for meta features
+                input_values = inputs.input_values
+                max_len_inference = 30 * sr # Limit context for Age/Gender/Emotion for stability
                 if input_values.shape[1] > max_len_inference:
-                    print(f"  Warning: Audio longer than 30s ({duration:.2f}s), truncating for Age/Gender/Emotion extraction.")
-                    input_values_truncated = input_values[:, :max_len_inference]
+                    input_values_truncated = input_values[:, :max_len_inference].to(device)
                 else:
-                    input_values_truncated = input_values
+                    input_values_truncated = input_values.to(device)
 
                 with torch.no_grad():
                     _, logits_age, logits_gender = age_gender_model(input_values_truncated)
@@ -585,49 +626,27 @@ def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size
                 gender = gender_map.get(gender_idx, "UNKNOWN")
             except RuntimeError as e:
                  if "CUDA out of memory" in str(e):
-                     print(f"  CUDA OOM Error during Age/Gender extraction for {os.path.basename(audio_path)}. Skipping file.")
-                     torch.cuda.empty_cache()
-                     gc.collect()
-                     continue # Skip this file
-                 else:
-                     print(f"  Runtime Error during Age/Gender extraction: {e}")
-                     age = -1.0
-                     gender = "ERROR"
+                     print(f"  CUDA OOM Error during Age/Gender extraction. Skipping file.")
+                     torch.cuda.empty_cache(); gc.collect(); continue
+                 else: print(f"  Runtime Error during Age/Gender extraction: {e}"); age = -1.0; gender = "ERROR"
             except Exception as age_gender_err:
-                print(f"  Error during Age/Gender extraction: {age_gender_err}")
-                age = -1.0
-                gender = "ERROR"
+                print(f"  Error during Age/Gender extraction: {age_gender_err}"); age = -1.0; gender = "ERROR"
 
-            # 4. Extract Emotion (Using potentially truncated signal if long)
-            emotion_signal = signal[:max_len_inference] if input_values.shape[1] > max_len_inference else signal
-            emotion = extract_emotion(emotion_signal, sr, emotion_model_info)
-
-            # 5. Create Initial Record Structure
+            # 4. Extract Emotion
+            emotion = "ERROR"
             try:
-                # Extract speaker ID assuming format like speakerid_utteranceid
-                speaker = os.path.splitext(os.path.basename(audio_path))[0].split('_')[0]
-            except IndexError:
-                speaker = "UNKNOWN_SPEAKER" # Fallback if filename format differs
+                 emotion_signal = signal[:max_len_inference] if 'input_values' in locals() and input_values.shape[1] > max_len_inference else signal
+                 emotion = extract_emotion(emotion_signal, sr, emotion_model_info)
+            except Exception as emotion_err:
+                 print(f"  Error during Emotion extraction: {emotion_err}"); emotion = "ERROR"
 
-            segment_data = AudioSegment(
-                start_time=0, end_time=duration, speaker=speaker, age=age,
-                gender=gender, transcription=transcription, emotion=emotion,
-                chunk_filename=os.path.basename(audio_path), duration=duration
-            )
+            # 5. Create Initial Record
+            try: speaker = os.path.splitext(os.path.basename(audio_path))[0].split('_')[0]
+            except IndexError: speaker = "UNKNOWN_SPEAKER"
+            segment_data = AudioSegment(start_time=0, end_time=duration, speaker=speaker, age=age, gender=gender, transcription=transcription, emotion=emotion, chunk_filename=os.path.basename(audio_path), duration=duration)
             chunk = ChunkData(segments=[segment_data], filepath=os.path.abspath(audio_path))
             initial_formatted_text = chunk.get_formatted_text()
-
-            # Store essential info needed for the final JSONL
-            record = {
-                "audio_filepath": chunk.filepath,
-                "duration": duration,
-                "initial_text": initial_formatted_text, # Temp field for AI input
-                 # Keep raw values for potential analysis, can be removed if not needed
-                 "raw_age_output": age,
-                 "raw_gender_prediction": gender,
-                 "raw_emotion_prediction": emotion,
-                 "speaker_id": speaker,
-            }
+            record = { "audio_filepath": chunk.filepath, "duration": duration, "initial_text": initial_formatted_text, "raw_age_output": age, "raw_gender_prediction": gender, "raw_emotion_prediction": emotion, "speaker_id": speaker }
             processed_records_buffer.append(record)
             files_processed_count += 1
 
@@ -638,136 +657,96 @@ def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size
                 print(f"\n--- Annotating Batch {batch_num} ({current_batch_size} records) ---")
 
                 texts_to_annotate = [rec["initial_text"] for rec in processed_records_buffer]
-
-                # Call Gemini for annotation (with retries and Odia prompt)
                 annotated_texts = annotate_batch_texts(texts_to_annotate)
 
-                # Verify annotation results length BEFORE attempting to save
                 if len(annotated_texts) != current_batch_size:
-                    print(f"  FATAL BATCH ERROR: Annotation count mismatch! Expected {current_batch_size}, Got {len(annotated_texts)}. Skipping save for this batch to prevent data corruption.")
-                    # Log the failed batch for later inspection if needed
-                    # error_log_path = output_jsonl_path + f".error_batch_{batch_num}.log"
-                    # print(f"  Logging error details to: {error_log_path}")
-                    # try:
-                    #     with open(error_log_path, 'w', encoding='utf-8') as f_err:
-                    #         json.dump({"original_records": processed_records_buffer,
-                    #                   "texts_sent_to_ai": texts_to_annotate,
-                    #                   "texts_received_from_ai": annotated_texts},
-                    #                   f_err, indent=2, ensure_ascii=False)
-                    # except Exception as log_e:
-                    #     print(f"    Failed to write error log: {log_e}")
-
+                     print(f"  FATAL BATCH ERROR: Annotation count mismatch! Expected {current_batch_size}, Got {len(annotated_texts)}. Skipping save.")
                 else:
-                     # Save the annotated batch to the final JSONL
                     try:
                         lines_written_in_batch = 0
-                        # *** CRITICAL: Ensure UTF-8 for appending Odia output ***
                         with open(output_jsonl_path, 'a', encoding='utf-8') as f_out:
                             for record_data, annotated_text in zip(processed_records_buffer, annotated_texts):
-                                # Prepare final record: use 'text' for the final annotated string
                                 final_record = {
                                     "audio_filepath": record_data["audio_filepath"],
                                     "duration": record_data["duration"],
-                                    "text": annotated_text, # This is the AI annotated + processed text
-                                    # Optionally include other fields if desired
-                                    # "speaker_id": record_data["speaker_id"],
+                                    "text": annotated_text,
                                 }
-                                # *** CRITICAL: ensure_ascii=False for Odia ***
+                                if "ANNOTATION_ERROR" in annotated_text:
+                                     print(f"  Warning: Saving record for {os.path.basename(record_data['audio_filepath'])} with annotation error flag: {annotated_text.split()[-1]}") # Show specific error
                                 json_str = json.dumps(final_record, ensure_ascii=False)
                                 f_out.write(json_str + '\n')
                                 lines_written_in_batch += 1
-
                         total_records_saved += lines_written_in_batch
-                        print(f"--- Batch {batch_num} annotated and saved ({lines_written_in_batch} records). Total saved: {total_records_saved} ---")
+                        print(f"--- Batch {batch_num} processed and saved ({lines_written_in_batch} records). Total saved: {total_records_saved} ---")
+                    except IOError as io_err: print(f"  Error writing batch {batch_num} to {output_jsonl_path}: {io_err}")
+                    except Exception as write_err: print(f"  Unexpected error writing batch {batch_num}: {write_err}")
 
-                    except IOError as io_err:
-                         print(f"  Error writing batch {batch_num} to {output_jsonl_path}: {io_err}")
-                    except Exception as write_err:
-                         print(f"  Unexpected error writing batch {batch_num}: {write_err}")
-
-                # Clear buffer and clean up memory regardless of save success/failure
                 processed_records_buffer = []
-                # Explicitly delete large tensors if needed, though GC should handle it
                 del texts_to_annotate, annotated_texts
                 if 'input_values' in locals(): del input_values
                 if 'input_values_truncated' in locals(): del input_values_truncated
                 if 'signal' in locals(): del signal
                 if 'logits_age' in locals(): del logits_age, logits_gender
-                torch.cuda.empty_cache()
-                gc.collect()
-                # Optional small delay between batches
-                # time.sleep(1)
+                torch.cuda.empty_cache(); gc.collect()
 
         except KeyboardInterrupt:
             print("\nProcessing interrupted by user.")
             break
         except Exception as e:
             print(f"  FATAL ERROR processing file {os.path.basename(audio_path)}: {e}")
-            import traceback
-            traceback.print_exc()
-            # Clean up memory before continuing
-            torch.cuda.empty_cache()
-            gc.collect()
-            continue # Skip to the next file
+            import traceback; traceback.print_exc()
+            torch.cuda.empty_cache(); gc.collect()
+            continue
 
-    print("\n" + "="*30)
-    print(f"Processing Finished.")
-    print(f"Total files processed attempt: {files_processed_count}/{total_files}")
-    print(f"Total records saved to {output_jsonl_path}: {total_records_saved}")
-    print("="*30)
+    print("\n" + "="*30 + f"\nProcessing Finished.\nTotal files processed attempt: {files_processed_count}/{total_files}\nTotal records saved to {output_jsonl_path}: {total_records_saved}\n" + "="*30)
 
 
 # --- Main Execution ---
 if __name__ == "__main__":
     # --- *** Configuration for Odia Data *** ---
-    # 1. SET THE BASE DIRECTORY CONTAINING YOUR ODIA 'audio' and 'text' subfolders
+    # <<< IMPORTANT: SET THESE PATHS TO YOUR ODIA DATA LOCATION >>>
     BASE_AUDIO_TEXT_DIR = "/external4/datasets/Shrutilipi/odia/od"  # <--- CHANGE THIS TO YOUR ODIA DATA PATH
 
     # 2. SET THE DESIRED OUTPUT FILENAME FOR THE ANNOTATED ODIA DATA
-    FINAL_OUTPUT_JSONL = "/external4/datasets/Shrutilipi/odia/od/od_annotated.jsonl" # <--- CHANGE THIS (e.g., od for Odia)
+    FINAL_OUTPUT_JSONL = "/external4/datasets/Shrutilipi/odia/od/od_annotated.jsonl"# Example: "/data/odia_speech/or/or_annotated_output.jsonl"
+    # <<< END OF IMPORTANT PATHS >>>
 
-    # 3. SET THE BATCH SIZE for AI Annotation (start small, e.g., 5 or 10)
-    PROCESSING_BATCH_SIZE = 10 # Adjust based on API limits and system memory
+    PROCESSING_BATCH_SIZE = 10 # Adjust based on API limits and memory (start smaller if needed)
 
-    # --- Ensure API key is loaded before starting ---
-    load_dotenv() # Load .env file if it exists
+    # --- API Key and Setup ---
+    load_dotenv()
     if not os.getenv("GOOGLE_API_KEY"):
-        print("ERROR: GOOGLE_API_KEY not found in environment or .env file.")
-        print("Please set the GOOGLE_API_KEY environment variable or create a .env file.")
+        print("ERROR: GOOGLE_API_KEY not found in environment variables or .env file.")
         exit(1)
-    # Re-check genai configuration after loading .env
     if genai is None:
         try:
             api_key_recheck = os.getenv("GOOGLE_API_KEY")
-            if not api_key_recheck:
-                 raise ValueError("GOOGLE_API_KEY still not found after .env load.")
+            if not api_key_recheck: raise ValueError("GOOGLE_API_KEY still not found.")
             genai.configure(api_key=api_key_recheck)
-            print("Google Generative AI re-configured successfully after .env load.")
+            print("Google Generative AI re-configured successfully.")
         except Exception as e:
-             print(f"ERROR: Failed to configure Google Generative AI even after loading .env: {e}")
+             print(f"ERROR: Failed to configure Google Generative AI: {e}")
              exit(1)
 
-
-    print("Starting Odia Audio Processing and Annotation Workflow...") # Updated print
+    print("Starting Odia Audio Processing and Annotation Workflow...")
     print(f"Input Base Directory: {BASE_AUDIO_TEXT_DIR}")
     print(f"Final Output File: {FINAL_OUTPUT_JSONL}")
     print(f"Processing Batch Size: {PROCESSING_BATCH_SIZE}")
     print("-" * 30)
 
-    # Check if base directory exists
+    if BASE_AUDIO_TEXT_DIR == "/path/to/your/odia/data/or":
+         print("WARNING: Input directory path seems to be the default placeholder.")
+         print("Please edit the script and set BASE_AUDIO_TEXT_DIR to your actual Odia data location.")
+         user_confirm = input("Continue anyway? (y/N): ")
+         if user_confirm.lower() != 'y':
+             print("Exiting. Please update the path.")
+             exit(1)
+
     if not os.path.isdir(BASE_AUDIO_TEXT_DIR):
         print(f"ERROR: Base directory not found: {BASE_AUDIO_TEXT_DIR}")
         exit(1)
-
-    # Check if output directory exists, create if not
     output_dir = os.path.dirname(FINAL_OUTPUT_JSONL)
-    if not os.path.exists(output_dir):
-        print(f"Creating output directory: {output_dir}")
-        try:
-            os.makedirs(output_dir, exist_ok=True)
-        except OSError as e:
-            print(f"ERROR: Could not create output directory: {e}")
-            exit(1)
+    os.makedirs(output_dir, exist_ok=True) # Ensure output dir exists
 
     process_audio_and_annotate(
         base_dir=BASE_AUDIO_TEXT_DIR,
@@ -776,3 +755,4 @@ if __name__ == "__main__":
     )
 
     print("Workflow complete.")
+

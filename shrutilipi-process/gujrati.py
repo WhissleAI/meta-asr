@@ -725,7 +725,7 @@ if __name__ == "__main__":
     FINAL_OUTPUT_JSONL = "/external4/datasets/Shrutilipi/gujarati/gj/gj_anoted.jsonl" # <--- CHANGE THIS (e.g., gu for Gujarati)
 
     # 3. SET THE BATCH SIZE for AI Annotation (start small, e.g., 5 or 10)
-    PROCESSING_BATCH_SIZE = 10 # Adjust based on API limits and system memory
+    PROCESSING_BATCH_SIZE = 100 # Adjust based on API limits and system memory
 
     # --- Ensure API key is loaded before starting ---
     load_dotenv() # Load .env file if it exists

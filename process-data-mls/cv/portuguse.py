@@ -331,10 +331,10 @@ def process_data(tsv_path: str, output_path: str, clips_dir: str):
 
 
 
-language_code = "pt"  # Change this to the language code you're processing (e.g., 'en', 'it', 'de')
+language_code = "ka"  # Change this to the language code you're processing (e.g., 'en', 'it', 'de')
 base_dir = f"/external4/datasets/cv/cv-corpus-15.0-2023-09-08/{language_code}"
 tsv_path = f"{base_dir}/validated.tsv"
 clips_dir = f"{base_dir}/clips"
-output_path = "/external4/datasets/jsonl_data/euro/french_cv.jsonl" 
+output_path = "/external4/datasets/jsonl_data/euro/gergian_cv.jsonl" 
 
 process_data(tsv_path, output_path, clips_dir)

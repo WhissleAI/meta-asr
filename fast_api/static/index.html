@@ -3,238 +3,165 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Audio Processing API Client</title>
+    <title>Audio Processing Interface</title>
     <style>
-        body {
-            font-family: sans-serif;
-            line-height: 1.6;
-            margin: 20px;
-            background-color: #f4f4f4;
-        }
-        .container {
-            max-width: 700px;
-            margin: auto;
-            background: #fff;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        h1, h2 {
-            color: #333;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        .form-group {
-            margin-bottom: 15px;
-        }
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-            color: #555;
-        }
-        input[type="text"] {
+        body { font-family: sans-serif; line-height: 1.6; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], select {
             width: 100%;
-            padding: 10px;
+            padding: 8px;
             border: 1px solid #ccc;
             border-radius: 4px;
-            box-sizing: border-box; /* Prevents padding from increasing width */
+            box-sizing: border-box; /* Important */
         }
-        .model-selection {
-            margin-bottom: 20px;
-            border: 1px solid #eee;
-            padding: 15px;
-            border-radius: 4px;
-            background-color: #fafafa;
-        }
-        .model-columns {
-            display: flex; /* Enable Flexbox */
-            gap: 20px; /* Space between columns */
-        }
-        .model-column {
-            flex: 1; /* Each column takes equal space */
-            border: 1px dashed #ddd;
-            padding: 10px;
-            border-radius: 4px;
-        }
-        .model-column label {
-            display: flex; /* Align radio button and text */
-            align-items: center;
-            cursor: pointer;
-            font-weight: normal; /* Override bold */
-        }
-         .model-column input[type="radio"] {
-            margin-right: 8px;
-            cursor: pointer;
-         }
-
         button {
-            display: block;
-            width: 100%;
-            padding: 12px;
-            background-color: #007bff;
-            color: white;
+            padding: 10px 15px;
             border: none;
             border-radius: 4px;
-            font-size: 16px;
             cursor: pointer;
-            transition: background-color 0.3s ease;
+            margin-right: 10px;
+            font-size: 1em;
         }
-        button:hover {
-            background-color: #0056b3;
-        }
-        #responseArea {
+        .button-transcribe { background-color: #007bff; color: white; }
+        .button-annotate { background-color: #28a745; color: white; }
+        .button-transcribe:hover { background-color: #0056b3; }
+        .button-annotate:hover { background-color: #1e7e34; }
+        #status {
             margin-top: 20px;
             padding: 15px;
-            border: 1px solid #ccc;
+            border: 1px solid #ddd;
             border-radius: 4px;
-            background-color: #e9e9e9;
+            background-color: #f8f8f8;
             white-space: pre-wrap; /* Preserve formatting */
-            word-wrap: break-word; /* Break long lines */
-            font-family: monospace;
-            min-height: 50px;
+            word-wrap: break-word; /* Wrap long lines */
         }
         .loading {
-            text-align: center;
-            color: #555;
-            font-style: italic;
+             font-style: italic;
+             color: #555;
         }
-        .success {
-            border-color: #28a745;
-            background-color: #d4edda;
-            color: #155724;
-        }
-        .error {
-            border-color: #dc3545;
-            background-color: #f8d7da;
-            color: #721c24;
-        }
+        .error { color: red; font-weight: bold; }
+        .success { color: green; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Audio Processing</h1>
+    <h1>Audio Processing Interface</h1>
+    <p>Enter the details below and choose an action.</p>
 
-        <form id="processForm">
-            <div class="form-group">
-                <label for="directoryPath">Directory Path (Absolute Path on Server):</label>
-                <input type="text" id="directoryPath" name="directory_path" placeholder="/path/to/your/audio/files" required>
-                 <small><i>Note: This must be an absolute path accessible by the server running the API.</i></small>
-            </div>
-
-             <div class="form-group">
-                <label for="outputPath">Output JSONL File Path (Absolute Path on Server):</label>
-                <input type="text" id="outputPath" name="output_jsonl_path" placeholder="/path/to/your/output/results.jsonl" required>
-                 <small><i>Note: This must be an absolute path accessible by the server running the API. The directory must exist.</i></small>
-            </div>
-
-            <div class="model-selection">
-                <h2>Select Transcription Model</h2>
-                 <p style="text-align: center; margin-top: -10px; margin-bottom: 15px;">Choose which model to use for audio transcription.</p>
-                <div class="model-columns">
-                    <!-- Column 1: Whissle -->
-                    <div class="model-column">
-                        <h3>Whissle</h3>
-                        <label>
-                            <input type="radio" id="modelWhissle" name="model_choice" value="whissle" required>
-                            Use Whissle Model
-                        </label>
-                        <p><small>Requires Whissle SDK and WHISSLE_AUTH_TOKEN configured on the server.</small></p>
-                    </div>
-
-                    <!-- Column 2: Gemini -->
-                    <div class="model-column">
-                        <h3>Gemini</h3>
-                         <label>
-                            <input type="radio" id="modelGemini" name="model_choice" value="gemini" checked required> <!-- Default checked -->
-                            Use Gemini Model
-                        </label>
-                        <p><small>Requires GOOGLE_API_KEY configured on the server.</small></p>
-                    </div>
-                </div>
-            </div>
-
-
-            <button type="submit">Process Audio Files</button>
-        </form>
-
-        <div id="responseArea">
-            API response will appear here...
+    <form id="audioForm">
+        <div class="form-group">
+            <label for="directory_path">Audio Directory Path:</label>
+            <input type="text" id="directory_path" name="directory_path" required placeholder="/path/to/your/audio/files">
         </div>
+
+        <div class="form-group">
+            <label for="model_choice">Transcription Model:</label>
+            <select id="model_choice" name="model_choice" required>
+                <option value="gemini">Gemini</option>
+                <option value="whissle">Whissle</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="output_jsonl_path">Output Manifest Path (.jsonl):</label>
+            <input type="text" id="output_jsonl_path" name="output_jsonl_path" required placeholder="/path/to/output/manifest.jsonl">
+        </div>
+
+        <!-- Buttons will trigger JavaScript functions -->
+        <button type="button" class="button-transcribe" onclick="submitProcessing('transcription')">Create Transcription Manifest</button>
+        <button type="button" class="button-annotate" onclick="submitProcessing('annotation')">Create Annotated Manifest</button>
+    </form>
+
+    <div id="status">
+        <p>Status messages will appear here.</p>
     </div>
 
     <script>
-        const form = document.getElementById('processForm');
-        const responseArea = document.getElementById('responseArea');
-
-        form.addEventListener('submit', async (event) => {
-            event.preventDefault(); // Prevent default page reload
-
-            // Clear previous response and show loading state
-            responseArea.textContent = 'Processing... Please wait.';
-            responseArea.className = 'loading'; // Reset classes and add loading
-
-            // Get form data
+        async function submitProcessing(type) {
+            const form = document.getElementById('audioForm');
+            const statusDiv = document.getElementById('status');
             const formData = new FormData(form);
-            const data = {};
-            formData.forEach((value, key) => {
-                data[key] = value;
-            });
 
-            console.log("Sending data:", data); // Log data being sent
+            // Basic frontend validation
+            const dirPath = formData.get('directory_path');
+            const outputPath = formData.get('output_jsonl_path');
+            if (!dirPath || !outputPath) {
+                statusDiv.innerHTML = '<p class="error">Error: Please fill in both directory and output paths.</p>';
+                return;
+            }
+             if (!outputPath.toLowerCase().endsWith('.jsonl')) {
+                statusDiv.innerHTML = '<p class="error">Error: Output path must end with .jsonl</p>';
+                return;
+            }
 
-            const apiUrl = '/process_audio_directory/'; // Relative URL to your API endpoint
+
+            const data = {
+                directory_path: dirPath,
+                model_choice: formData.get('model_choice'),
+                output_jsonl_path: outputPath
+            };
+
+            let endpoint = '';
+            if (type === 'transcription') {
+                endpoint = '/create_transcription_manifest/';
+                statusDiv.innerHTML = '<p class="loading">Starting transcription-only manifest creation...</p>';
+            } else if (type === 'annotation') {
+                endpoint = '/create_annotated_manifest/';
+                statusDiv.innerHTML = '<p class="loading">Starting full annotation manifest creation...</p>';
+            } else {
+                statusDiv.innerHTML = '<p class="error">Error: Invalid processing type.</p>';
+                return;
+            }
 
             try {
-                const response = await fetch(apiUrl, {
+                // Disable buttons during processing? (Optional)
+                document.querySelectorAll('#audioForm button').forEach(btn => btn.disabled = true);
+
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json' // Explicitly accept JSON response
+                        'Accept': 'application/json' // Indicate we expect JSON back
                     },
-                    body: JSON.stringify(data) // Send data as JSON
+                    body: JSON.stringify(data)
                 });
 
-                const result = await response.json(); // Try to parse JSON response
+                // Check if response is JSON
+                const contentType = response.headers.get("content-type");
+                let result;
+                 if (contentType && contentType.indexOf("application/json") !== -1) {
+                    result = await response.json(); // Parse JSON response
+                 } else {
+                    // Handle non-JSON responses (e.g., HTML error pages from server)
+                    const textResponse = await response.text();
+                    throw new Error(`Server returned non-JSON response (Status ${response.status}): ${textResponse.substring(0, 200)}...`);
+                 }
 
-                console.log("Received response:", response.status, result);
-
-                // Clear loading text before showing response
-                responseArea.textContent = '';
 
                 if (response.ok) {
                     // Success
-                    responseArea.className = 'success'; // Add success class
-                    responseArea.textContent = `Status: ${response.status}\n\nResponse:\n${JSON.stringify(result, null, 2)}`;
+                    let statusHtml = `<p class="success">Success!</p>`;
+                    statusHtml += `<p><strong>Message:</strong> ${result.message}</p>`;
+                    statusHtml += `<p><strong>Output File:</strong> ${result.output_file}</p>`;
+                    statusHtml += `<p><strong>Files Processed:</strong> ${result.processed_files}</p>`;
+                    statusHtml += `<p><strong>Records Saved:</strong> ${result.saved_records}</p>`;
+                    statusHtml += `<p><strong>Files with Errors:</strong> ${result.errors}</p>`;
+                    statusDiv.innerHTML = statusHtml;
                 } else {
-                    // Handle HTTP errors (e.g., 4xx, 5xx)
-                    responseArea.className = 'error'; // Add error class
-                    let errorMessage = `Error: ${response.status} ${response.statusText}\n\n`;
-                    // FastAPI often returns error details in the JSON body
-                    if (result && result.detail) {
-                         // Handle FastAPI's HTTPException detail (can be string or object)
-                        if (typeof result.detail === 'string') {
-                             errorMessage += `Detail: ${result.detail}`;
-                        } else if (Array.isArray(result.detail)) {
-                             errorMessage += `Details:\n${result.detail.map(e => `  - ${e.loc ? e.loc.join(' -> ') + ': ' : ''}${e.msg}`).join('\n')}`;
-                        } else if (typeof result.detail === 'object'){
-                             errorMessage += `Detail: ${JSON.stringify(result.detail, null, 2)}`;
-                        } else {
-                             errorMessage += `Response Body: ${JSON.stringify(result, null, 2)}`;
-                        }
-                    } else {
-                        errorMessage += `Response Body: ${JSON.stringify(result, null, 2)}`; // Show raw body if detail missing
-                    }
-                     responseArea.textContent = errorMessage;
+                    // API returned an error (like 4xx or 5xx with JSON detail)
+                    let errorMsg = `API Error (Status ${response.status}): ${result.detail || JSON.stringify(result)}`;
+                    statusDiv.innerHTML = `<p class="error">Error: ${errorMsg}</p>`;
                 }
 
             } catch (error) {
-                console.error("Fetch Error:", error);
-                responseArea.textContent = ''; // Clear loading text
-                responseArea.className = 'error'; // Add error class
-                responseArea.textContent = `Network or Client-Side Error:\n${error.message}\n\nCheck the browser console and ensure the API server is running and accessible at ${apiUrl}.`;
+                // Network errors or other issues during fetch/parsing
+                console.error("Processing Error:", error);
+                statusDiv.innerHTML = `<p class="error">An error occurred: ${error.message || 'Could not connect to the server or process the request.'}</p>`;
+            } finally {
+                 // Re-enable buttons
+                 document.querySelectorAll('#audioForm button').forEach(btn => btn.disabled = false);
             }
-        });
+        }
     </script>
 
 </body>

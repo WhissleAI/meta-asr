@@ -710,7 +710,7 @@ if __name__ == "__main__":
     # --- *** Configuration for Marathi Data *** ---
     BASE_AUDIO_TEXT_DIR = "/external4/datasets/Shrutilipi/marathi/mr"  # <--- VERIFY/CHANGE THIS
     FINAL_OUTPUT_JSONL = "/external4/datasets/Shrutilipi/marathi/mr/mr_annotated_v2.jsonl" # <--- Use a new name to avoid overwriting
-    PROCESSING_BATCH_SIZE = 100 # Adjust as needed (maybe start smaller, like 10-20, to test)
+    PROCESSING_BATCH_SIZE = 10 # Adjust as needed (maybe start smaller, like 10-20, to test)
 
     # --- API Key and Setup ---
     load_dotenv()

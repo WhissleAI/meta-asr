@@ -712,8 +712,8 @@ def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size
 if __name__ == "__main__":
     # --- *** Configuration for Chhattisgarhi Data *** ---
     # >>> IMPORTANT: SET THESE PATHS TO YOUR CHHATTISGARHI DATA LOCATION <<<
-    BASE_DATA_DIR = "/external4/datasets/madasr/chhatishgarhi/test"  # Directory containing 'audio_train' and 'text'
-    FINAL_OUTPUT_JSONL = "/external4/datasets/madasr/chhatishgarhi/test/cg_test_output.jsonl" # Desired output file path
+    BASE_DATA_DIR = "/external4/datasets/madasr/chhatishgarhi/dev"  # Directory containing 'audio_train' and 'text'
+    FINAL_OUTPUT_JSONL = "/external4/datasets/madasr/chhatishgarhi/dev/cg_test_output.jsonl" # Desired output file path
     # <<< END OF PATHS TO CHANGE <<<
 
     PROCESSING_BATCH_SIZE = 10 # Adjust based on API limits and system memory

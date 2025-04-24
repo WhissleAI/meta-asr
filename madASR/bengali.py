@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*- # Ensure editor recognizes UTF-8 for Bengali script
+# -*- coding: utf-8 -*- # Ensure editor recognizes UTF-8 for Bengali script comments/examples
 import os
 import gc
 import json
@@ -6,20 +6,19 @@ import re
 import torch
 import librosa
 import numpy as np
-import pandas as pd # For reading TSV
 from pathlib import Path
 from dotenv import load_dotenv
-from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Any, Optional
 from transformers import (
     AutoModelForAudioClassification,
     AutoFeatureExtractor,
+    # Added back for age/gender prediction fallback
     Wav2Vec2Processor,
     Wav2Vec2Model,
     Wav2Vec2PreTrainedModel
 )
-import torch.nn as nn
+import torch.nn as nn # Added back for age/gender prediction fallback
 import google.generativeai as genai
 import time
 import soundfile as sf
@@ -34,7 +33,7 @@ if torch.cuda.is_available():
     print(f"Device count: {torch.cuda.device_count()}")
     print(f"Current device: {torch.cuda.current_device()}")
     print(f"Device name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
-    device = torch.device("cuda:0")
+    device = torch.device("cuda:1")
 else:
     print("CUDA not available, using CPU.")
     device = torch.device("cpu")
@@ -43,21 +42,14 @@ else:
 try:
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        print("Warning: GOOGLE_API_KEY environment variable not found or is empty.")
-        print("Attempting to load from .env file if present...")
-        load_dotenv()
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-             raise ValueError("GOOGLE_API_KEY environment variable is still not found or empty after loading .env.")
-
+        raise ValueError("GOOGLE_API_KEY environment variable not found or is empty.")
     genai.configure(api_key=api_key)
     print("Google Generative AI configured successfully.")
 except Exception as e:
-    print(f"Error configuring or testing Google Generative AI: {e}. Annotation step will likely fail.")
+    print(f"Error configuring Google Generative AI: {e}. Annotation step will likely fail.")
     genai = None
 
-
-# --- Age/Gender Model Definition (Unchanged) ---
+# --- Age/Gender Model Definition (Reintroduced for Fallback) ---
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
         super().__init__()
@@ -71,212 +63,160 @@ class ModelHead(nn.Module):
         return x
 
 class AgeGenderModel(Wav2Vec2PreTrainedModel):
+    # Uses Wav2Vec2 model to predict age (float) and gender (3 classes)
     def __init__(self, config):
         super().__init__(config)
         self.config = config; self.wav2vec2 = Wav2Vec2Model(config)
-        self.age = ModelHead(config, 1); self.gender = ModelHead(config, 3)
+        # We only need the age head for the fallback prediction
+        self.age = ModelHead(config, 1)
+        # self.gender = ModelHead(config, 3) # Gender head not needed if only predicting age
         self.init_weights()
 
     def forward(self, input_values):
-        outputs = self.wav2vec2(input_values)
-        hidden_states = outputs[0]; hidden_states_pooled = torch.mean(hidden_states, dim=1)
+        outputs = self.wav2vec2(input_values); hidden_states = outputs[0]
+        hidden_states_pooled = torch.mean(hidden_states, dim=1)
         logits_age = self.age(hidden_states_pooled)
-        logits_gender = torch.softmax(self.gender(hidden_states_pooled), dim=-1)
-        return hidden_states_pooled, logits_age, logits_gender
+        # logits_gender = torch.softmax(self.gender(hidden_states_pooled), dim=-1) # Not needed
+        # Return only age logit
+        return logits_age
 
 # --- Emotion Extraction Function (Unchanged) ---
-def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000, model_info: Optional[dict] = None) -> str:
+def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000, model_info: dict = None) -> str:
+    """Extracts emotion from audio using a preloaded model."""
     if model_info is None or 'model' not in model_info or 'feature_extractor' not in model_info:
-        return "ErrorLoadingModel"
-    if audio_data is None or len(audio_data) == 0: return "No_Audio"
+        print("Error: Emotion model not loaded correctly."); return "ERRORLOADINGMODEL" # Consistent uppercase
+    if audio_data is None or len(audio_data) == 0: return "NO_AUDIO"
     try:
         inputs = model_info['feature_extractor'](audio_data, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
         inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+        max_len_inference_emotion = 30 * sampling_rate
+        if inputs['input_values'].shape[1] > max_len_inference_emotion:
+            inputs['input_values'] = inputs['input_values'][:, :max_len_inference_emotion]
+            if 'attention_mask' in inputs:
+                 inputs['attention_mask'] = inputs['attention_mask'][:, :max_len_inference_emotion]
+
         with torch.no_grad(): outputs = model_info['model'](**inputs)
         predicted_class_idx = outputs.logits.argmax(-1).item()
-        return model_info['model'].config.id2label.get(predicted_class_idx, "Unknown").upper()
-    except Exception as e: print(f"Error during emotion extraction: {e}"); return "Extraction_Error"
+        emotion_label = model_info['model'].config.id2label.get(predicted_class_idx, "UNKNOWN")
+        return emotion_label.upper()
+    except RuntimeError as e:
+        if "CUDA out of memory" in str(e):
+            print(f"CUDA OOM Error during emotion extraction. Returning 'OOM_ERROR'.");
+            torch.cuda.empty_cache(); gc.collect(); return "OOM_ERROR"
+        else: print(f"Runtime Error during emotion extraction: {e}"); return "RUNTIME_ERROR"
+    except Exception as e: print(f"Error during emotion extraction: {e}"); return "EXTRACTION_ERROR"
 
-# --- Data Structures (Unchanged) ---
-@dataclass
-class AudioSegment:
-    start_time: float; end_time: float; speaker: str; age: float; gender: str
-    transcription: str # This will hold Bengali text
-    emotion: str; chunk_filename: str; duration: float
-
-@dataclass
-class ChunkData:
-    segments: List[AudioSegment] = field(default_factory=list); filepath: str = ""
-    def get_formatted_text(self) -> str:
-        if not self.segments: return ""
-        segment = self.segments[0]; age_bucket = self.get_age_bucket(segment.age)
-        gender_text = segment.gender; emotion_text = segment.emotion.upper()
-        transcription = segment.transcription.strip()
-        metadata = f"AGE_{age_bucket} GENDER_{gender_text} EMOTION_{emotion_text}"
-        return f"{transcription.strip()} {metadata.strip()}"
-    @staticmethod
-    def get_age_bucket(age: float) -> str:
-        actual_age = round(age * 100)
-        brackets = [(18, "0_18"), (30, "18_30"), (45, "30_45"), (60, "45_60"), (float('inf'), "60PLUS")]
-        for threshold, bracket in brackets:
-            if actual_age < threshold: return bracket
-        return "60PLUS"
-
-# --- *** NEW Function for loading Bengali TSV *** ---
-def load_bengali_tsv(tsv_file_path: str, audio_files_dir: str) -> List[Tuple[str, str, str]]:
-    """
-    Loads data from the specific Bengali utt_spk_text.tsv format.
-
-    Args:
-        tsv_file_path: Path to the utt_spk_text.tsv file.
-        audio_files_dir: Path to the directory containing the .flac audio files (e.g., 'data').
-
-    Returns:
-        A list of tuples: [(full_audio_path, transcription_text, speaker_id), ...].
-        Returns empty list on error.
-    """
-    pairs = []
-    missing_audio_files = 0
-    malformed_lines = 0
-    print(f"Reading data from Bengali TSV: {tsv_file_path}")
-    print(f"Looking for audio files in: {audio_files_dir}")
-
+# --- Age Prediction Function (New Fallback Function) ---
+def predict_age_from_audio(signal: np.ndarray, sampling_rate: int, processor: Wav2Vec2Processor, model: AgeGenderModel) -> Optional[float]:
+    """Predicts age (raw float) from audio signal using the provided model."""
+    if signal is None or len(signal) == 0:
+        print("  Age Prediction Error: No audio signal provided.")
+        return None
     try:
-        # Read the TSV with 3 columns, no header, UTF-8 encoding
-        df = pd.read_csv(
-            tsv_file_path,
-            sep='\t',
-            header=None,
-            names=['utterance_id', 'speaker_id', 'transcription'],
-            encoding='utf-8',
-            on_bad_lines='warn' # Log problematic lines
-        )
+        max_len_inference = 30 * sampling_rate # Limit input length for stability
+        inputs = processor(signal, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
+        input_values = inputs.input_values
+        input_values_truncated = input_values[:, :max_len_inference].to(device) if input_values.shape[1] > max_len_inference else input_values.to(device)
 
-        for index, row in df.iterrows():
-            try:
-                # Check for NaN or empty strings
-                if pd.isna(row['utterance_id']) or pd.isna(row['speaker_id']) or pd.isna(row['transcription']) \
-                   or not str(row['utterance_id']).strip() or not str(row['transcription']).strip():
-                    print(f"Warning: Skipping malformed/empty line {index + 1} in TSV: {row.to_list()}")
-                    malformed_lines += 1
-                    continue
-
-                utterance_id = str(row['utterance_id']).strip()
-                speaker_id = str(row['speaker_id']).strip() # Keep speaker ID
-                transcription = str(row['transcription']).strip()
-
-                # Construct the expected audio filename (utterance_id + .flac)
-                audio_filename = f"{utterance_id}.flac"
-                audio_path = os.path.join(audio_files_dir, audio_filename)
-
-                # Check if the audio file actually exists
-                if os.path.isfile(audio_path):
-                    pairs.append((audio_path, transcription, speaker_id)) # Store path, text, and speaker
-                else:
-                    # Be less verbose, maybe print only first few missing ones?
-                    if missing_audio_files < 5:
-                        print(f"Warning: Audio file listed in TSV not found: {audio_path} (from line {index + 1})")
-                    elif missing_audio_files == 5:
-                         print("Warning: Further missing audio file warnings will be suppressed.")
-                    missing_audio_files += 1
-
-            except Exception as line_err:
-                print(f"Error processing line {index + 1} in {tsv_file_path}: {line_err} - Row Data: {row.to_list()}")
-                malformed_lines += 1
-
-        print(f"Read {len(df)} lines from TSV.")
-        print(f"Successfully created {len(pairs)} audio-transcription-speaker tuples.")
-        if malformed_lines > 0:
-            print(f"Found {malformed_lines} malformed or skipped lines in TSV.")
-        if missing_audio_files > 0:
-            print(f"Warning: {missing_audio_files} audio files listed in TSV were not found in {audio_files_dir}.")
-
-        if not pairs:
-             print(f"Warning: No valid audio-transcription pairs were created from {tsv_file_path}. Check paths and TSV format.")
-
-    except FileNotFoundError:
-        print(f"Error: TSV file not found: {tsv_file_path}")
-        return []
-    except pd.errors.ParserError as pe:
-        print(f"Error parsing TSV file {tsv_file_path}: {pe}. Check delimiter and file integrity.")
-        return []
+        with torch.no_grad():
+            logits_age = model(input_values_truncated)
+        age_prediction_float = logits_age.cpu().numpy().item()
+        return age_prediction_float
+    except RuntimeError as e:
+        if "CUDA out of memory" in str(e):
+            print(f"  CUDA OOM Error during age prediction. Cannot predict age.");
+            torch.cuda.empty_cache(); gc.collect()
+            return None
+        else:
+            print(f"  Runtime Error during age prediction: {e}"); return None
     except Exception as e:
-        print(f"An unexpected error occurred while reading {tsv_file_path}: {e}")
-        return []
+        print(f"  Error during age prediction: {e}"); return None
 
-    return pairs
+# --- Age Bucketing Function (New - Converts predicted float to category) ---
+def get_age_bucket_from_prediction(age_float: Optional[float]) -> str:
+    """Converts predicted age float (0.0 to 1.0 range approx) to age bucket string."""
+    if age_float is None or age_float < 0: # Handle prediction failure or invalid values
+        return "UNKNOWN"
+    try:
+        # Model output is often scaled differently, assume roughly maps 0->0yrs, 1->100yrs for bucketing
+        # Adjust multiplier if model has different known output scale
+        actual_age = round(age_float * 100)
+        if actual_age < 18: return "0_17" # Using slightly different buckets for clarity
+        elif actual_age < 30: return "18_29"
+        elif actual_age < 45: return "30_44"
+        elif actual_age < 60: return "45_59"
+        else: return "60PLUS"
+    except Exception as e:
+        print(f"  Error bucketing predicted age {age_float}: {e}")
+        return "UNKNOWN" # Fallback if conversion fails
 
 
-# --- AI Annotation Functions ---
-
-def correct_entity_tag_spaces(text: str) -> str: # Unchanged
-    if not isinstance(text, str): return text
-    def replace_spaces(match):
-        tag_part = match.group(1); type_part = tag_part[len("ENTITY_"):]
-        corrected_type = type_part.replace(' ', '')
-        return f"ENTITY_{corrected_type}"
-    pattern = r'\b(ENTITY_[A-Z0-9_ ]*?[A-Z0-9_])(?=\s+\S)'
-    return re.sub(pattern, replace_spaces, text)
-
-def fix_end_tags_and_spacing(text: str) -> str: # Unchanged (Handles Devanagari/Bengali via \w)
+# --- AI Annotation Helper Functions (fix_end_tags_and_spacing - Unchanged) ---
+def fix_end_tags_and_spacing(text: str) -> str:
+    """
+    Cleans up AI-generated annotations for Bengali text, focusing on END tag placement,
+    spacing around tags, internal spaces in tag types, and common punctuation.
+    Handles Bengali script characters via \w in regex. Uses Bengali Dari '।'
+    """
     if not isinstance(text, str): return text
     text = re.sub(r'\s+', ' ', text).strip()
     def remove_internal_spaces(match):
-        prefix, body = match.group(1), match.group(2)
-        cleaned_body = re.sub(r'\\s+', '', body)
-        return f"{prefix}{cleaned_body}"
-    text = re.sub(r'\b(ENTITY_)([A-Z0-9_]+(?: +[A-Z0-9_]+)+)\\b', remove_internal_spaces, text)
-    text = re.sub(r'(\bENTITY_[A-Z0-9_]+)(\S)', r'\1 \2', text) # Space after ENTITY_TAG
-    text = re.sub(r'(\S)(END\b)', r'\1 \2', text) # Space before END
-    text = re.sub(r'(\bEND)(\S)', r'\1 \2', text) # Space after END
-    text = re.sub(r'\bEND\s+END\b', 'END', text); text = re.sub(r'\bEND\s+END\b', 'END', text) # Dup ENDs
-    text = re.sub(r'\bEND\s*(\b(?:AGE_|GENDER_|EMOTION_|INTENT_)|$)', r'\1', text) # END before metadata/EOF
-    text = re.sub(r'\bEND\s*(\b(?:AGE_|GENDER_|EMOTION_|INTENT_)|$)', r'\1', text) # Run again
-    text = re.sub(r'\s+([?!:;,।.])', r'\1', text) # Space before punct (added Bengali dā̃ṛi ।)
-    text = re.sub(r'([?!:;,।.])(\w)', r'\1 \2', text) # Space after punct
-    text = re.sub(r'\s+', ' ', text).strip() # Final whitespace
+        tag_prefix = match.group(1); tag_body = match.group(2)
+        corrected_body = re.sub(r'\s+', '', tag_body); return f"{tag_prefix}{corrected_body}"
+    text = re.sub(r'\b(ENTITY_)([A-Z0-9_]+(?: +[A-Z0-9_]+)+)\b', remove_internal_spaces, text)
+    text = re.sub(r'(\bENTITY_[A-Z0-9_]+)(\S)', r'\1 \2', text)
+    text = re.sub(r'(\S)(END\b)', r'\1 \2', text)
+    text = re.sub(r'(\bEND)(\S)', r'\1 \2', text)
+    text = re.sub(r'\bEND\s+END\b', 'END', text)
+    text = re.sub(r'\bEND\s+END\b', 'END', text)
+    text = re.sub(r'\bEND\s*(\b(?:AGE_|GENDER_|EMOTION_|DOMAIN_|INTENT_)|$)', r'\1', text)
+    text = re.sub(r'\bEND\s*(\b(?:AGE_|GENDER_|EMOTION_|DOMAIN_|INTENT_)|$)', r'\1', text)
+    text = re.sub(r'\s+([?!:;,.।])', r'\1', text)
+    text = re.sub(r'([?!:;,.।])(\w)', r'\1 \2', text)
+    text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# --- *** MODIFIED PROMPT FOR BENGALI *** ---
+# --- MODIFIED PROMPT FOR BENGALI (annotate_batch_texts - Unchanged from previous Bengali version) ---
 def annotate_batch_texts(texts_to_annotate: List[str]):
     """Sends a batch of texts to Gemini for annotation (Prompt refined for Bengali)."""
     if not genai:
         print("Error: Google Generative AI not configured. Skipping annotation.")
-        return texts_to_annotate
-    if not texts_to_annotate: return []
+        return [t + " ANNOTATION_ERROR_NO_GENAI" for t in texts_to_annotate]
+    if not texts_to_annotate:
+        return []
 
-    # Input texts already have metadata like: "bengali text AGE_X GENDER_Y EMOTION_Z"
+    # Input texts have metadata like: "bengali text AGE_X GENDER_Y EMOTION_Z DOMAIN_W" (DOMAIN_W is already capitalized)
 
     # *** REFINED BENGALI PROMPT STARTS HERE ***
-    prompt = f'''You are an expert linguistic annotator specifically for **Bengali** text written in the **Bengali script**. Your task is to process a list of Bengali sentences, each already containing `AGE_*`, `GENDER_*`, and `EMOTION_*` metadata tags at the end. Follow these instructions with extreme precision:
+    prompt = f'''You are an expert linguistic annotator specifically for **Bengali** text written in the **Bengali script**. Your task is to process a list of Bengali sentences, each already containing `AGE_*`, `GENDER_*`, `EMOTION_*`, and `DOMAIN_*` metadata tags at the end. Follow these instructions with extreme precision:
 
 1.  **Preserve Existing Metadata Tags:**
-    *   The `AGE_*`, `GENDER_*`, and `EMOTION_*` tags at the end of each sentence **must** remain exactly as they are.
+    *   The `AGE_*`, `GENDER_*`, `EMOTION_*`, and `DOMAIN_*` tags at the end of each sentence **must** remain exactly as they are, including the case (e.g., `DOMAIN_BANKING`).
     *   **Do not** modify, move, delete, or change these existing metadata tags.
 
 2.  **Entity Annotation (Bengali Text Only):**
-    *   Identify entities **only** within the main **Bengali** transcription part of the sentence (before the metadata).
+    *   Identify entities **only** within the main Bengali transcription part of the sentence (before the metadata).
     *   Use **only** the entity types provided in the `Allowed ENTITY TYPES` list below. Do not invent new types.
 
 3.  **Strict Entity Tagging Format:**
-    *   **Tag Insertion:** Place the entity tag **immediately before** the identified Bengali entity text. The tag format is `ENTITY_<TYPE>` (e.g., `ENTITY_LOCATION`, `ENTITY_PERSON_NAME`).
+    *   **Tag Insertion:** Place the entity tag **immediately before** the identified Bengali entity text. The tag format is `ENTITY_<TYPE>` (e.g., `ENTITY_CITY`, `ENTITY_PERSON_NAME`).
     *   **NO SPACES IN TYPE:** Ensure the `<TYPE>` part of the tag contains **no spaces** (e.g., `PERSON_NAME` is correct, `PERSON_ NAM E` is **incorrect**).
     *   **`END` Tag Placement:** Place the literal string `END` **immediately after** the *complete* Bengali entity text.
-    *   **Spacing:** There must be exactly **one space** between the `ENTITY_<TYPE>` tag and the start of the entity text. There must be exactly **one space** between the end of the entity text and the `END` tag. There must be exactly **one space** after the `END` tag before the next word begins (unless followed by punctuation like the Bengali dā̃ṛi '।').
+    *   **Spacing:** There must be exactly **one space** between the `ENTITY_<TYPE>` tag and the start of the entity text. There must be exactly **one space** between the end of the entity text and the `END` tag. There must be exactly **one space** after the `END` tag before the next word begins (unless followed by punctuation).
     *   **Example:** For the entity "কলকাতা", the correct annotation is `ENTITY_CITY কলকাতা END`.
     *   **Crucial `END` Rule:** Only add **one** `END` tag right after the full entity phrase. Do **not** add `END` tags after individual words within a multi-word entity or after words that simply follow an entity.
-    *   **Avoid Extra `END` Before Metadata:** Do **not** place an `END` tag just before the `AGE_`, `GENDER_`, `EMOTION_`, or `INTENT_` tags unless that `END` tag correctly marks the end of an immediately preceding entity.
+    *   **Avoid Extra `END` Before Metadata:** Do **not** place an `END` tag just before the `AGE_`, `GENDER_`, `EMOTION_`, `DOMAIN_`, or `INTENT_` tags unless that `END` tag correctly marks the end of an immediately preceding entity.
 
 4.  **Intent Tag:**
-    *   Determine the single primary intent of the **Bengali** sentence (e.g., `INFORM`, `QUESTION`, `REQUEST`, `COMMAND`, `GREETING`).
-    *   Append **one** `INTENT_<INTENT_TYPE>` tag at the **absolute end** of the entire string, after all other tags (`AGE_`, `GENDER_`, `EMOTION_`).
+    *   Determine the single primary intent of the Bengali sentence (e.g., `INFORM`, `QUESTION`, `REQUEST`, `COMMAND`, `GREETING`, `OTHER`).
+    *   Append **one** `INTENT_<INTENT_TYPE>` tag at the **absolute end** of the entire string, after all other tags (`AGE_`, `GENDER_`, `EMOTION_`, `DOMAIN_`).
 
 5.  **Output Format:**
     *   Return a **JSON array** of strings. Each string must be a fully annotated sentence following all the rules above.
 
 6.  **Bengali Language Specifics:**
     *   Handle Bengali script correctly.
-    *   Ensure correct spacing around common punctuation (like `?`, `!`, `।`). Remove space before punctuation, ensure space after punctuation if followed by a word.
+    *   Ensure correct spacing around Bengali punctuation (like `।`, `.`, `?`, `!`). Remove space before punctuation, ensure space after punctuation if followed by a word.
     *   The final output string must be clean, with single spaces separating words and tags according to the rules.
 
 **Allowed ENTITY TYPES (Use Only These):**
@@ -287,24 +227,26 @@ def annotate_batch_texts(texts_to_annotate: List[str]):
     "RELATIONSHIP", "EMERGENCY_CONTACT", "PROJECT_PHASE", "VERSION", "DEVELOPMENT_STAGE", "DEVICE_NAME", "OPERATING_SYSTEM", "SOFTWARE_VERSION", "BRAND", "MODEL_NUMBER", "LICENSE_PLATE", "VEHICLE_MAKE", "VEHICLE_MODEL", "VEHICLE_TYPE", "FLIGHT_NUMBER", "HOTEL_NAME", "ROOM_NUMBER", "TRANSACTION_ID", "TICKET_NUMBER", "SEAT_NUMBER", "GATE", "TERMINAL", "TRANSACTION_TYPE", "PAYMENT_STATUS", "PAYMENT_REFERENCE", "INVOICE_STATUS",
     "SYMPTOM", "DIAGNOSIS", "MEDICATION", "DOSAGE", "ALLERGY", "PRESCRIPTION", "TEST_NAME", "TEST_RESULT", "MEDICAL_RECORD", "HEALTH_STATUS", "HEALTH_METRIC", "VITAL_SIGN", "DOCTOR_NAME", "HOSPITAL_NAME", "DEPARTMENT", "WARD", "CLINIC_NAME", "WEBSITE", "URL", "IP_ADDRESS", "MAC_ADDRESS", "USERNAME", "PASSWORD", "LANGUAGE", "CODE_SNIPPET", "DATABASE_NAME", "API_KEY", "WEB_TOKEN", "URL_PARAMETER", "SERVER_NAME", "ENDPOINT", "DOMAIN" ]
 
-**Examples Demonstrating Correct Formatting (Bengali):**
+**Examples Demonstrating Correct Formatting (Bengali - Using structure examples):**
 
-*   **Input:** `"বীরভূম জেলা হাসপাতালে AGE_30_45 GENDER_MALE EMOTION_NEUTRAL"`
-*   **Correct Output:** `"ENTITY_LOCATION বীরভূম জেলা END হাসপাতালে AGE_30_45 GENDER_MALE EMOTION_NEUTRAL INTENT_INFORM"`
+*   **Input:** `"আমার নাম রমেশ। AGE_30-45 GENDER_MALE EMOTION_NEUTRAL DOMAIN_GENERAL"`
+*   **Correct Output:** `"আমার নাম ENTITY_PERSON_NAME রমেশ END । AGE_30-45 GENDER_MALE EMOTION_NEUTRAL DOMAIN_GENERAL INTENT_INFORM"`
 
-*   **Input:** `"আপনার গল্প ছাড়া AGE_45_60 GENDER_FEMALE EMOTION_SAD"`
-*   **Correct Output:** `"আপনার গল্প ছাড়া AGE_45_60 GENDER_FEMALE EMOTION_SAD INTENT_INFORM"`
-    *(Note: No entities identified)*
+*   **Input:** `"সে কলকাতা তে থাকে। AGE_45-60 GENDER_FEMALE EMOTION_NEUTRAL DOMAIN_LOCATION"`
+*   **Correct Output:** `"সে ENTITY_CITY কলকাতা END তে থাকে। AGE_45-60 GENDER_FEMALE EMOTION_NEUTRAL DOMAIN_LOCATION INTENT_INFORM"`
 
-*   **Input:** `"মান্নান সৈয়দের মৃত্যুর পর বেরিয়েছে AGE_18_30 GENDER_MALE EMOTION_NEUTRAL"`
-*   **Correct Output:** `"ENTITY_PERSON_NAME মান্নান সৈয়দের END মৃত্যুর পর বেরিয়েছে AGE_18_30 GENDER_MALE EMOTION_NEUTRAL INTENT_INFORM"`
+*   **Input:** `"মিটিং ১০ই মে হবে। AGE_18-24 GENDER_MALE EMOTION_NEUTRAL DOMAIN_MEETING"`
+*   **Correct Output:** `"মিটিং ENTITY_DATE ১০ই মে END হবে। AGE_18-24 GENDER_MALE EMOTION_NEUTRAL DOMAIN_MEETING INTENT_INFORM"`
+
+*   **Input:** `"দয়া করে চুপ করুন? AGE_60+ GENDER_MALE EMOTION_ANGRY DOMAIN_INSTRUCTION"`
+*   **Correct Output:** `"দয়া করে চুপ করুন? AGE_60+ GENDER_MALE EMOTION_ANGRY DOMAIN_INSTRUCTION INTENT_REQUEST"`
 
 **Incorrect Examples (Common Mistakes to Avoid):**
-*   `... ENTITY_LOCA TION বীরভূম জেলা END ...` (Space in TYPE)
-*   `... ENTITY_LOCATION বীরভূম জেলাEND ...` (Missing space before END)
-*   `... ENTITY_LOCATION বীরভূম জেলা ENDহাসপাতালে ...` (Missing space after END)
-*   `... পর বেরিয়েছে END AGE_...` (Unnecessary END before metadata)
-*   `... বীরভূম END জেলা END ...` (Incorrectly adding END after non-entity words)
+*   `... ENTITY_PERSON_ NAM E রমেশ END ...` (Space in TYPE)
+*   `... ENTITY_CITY কলকাতাEND ...` (Missing space before END)
+*   `... ENTITY_CITY কলকাতা ENDতে ...` (Missing space after END)
+*   `... থাকে END AGE_...` (Unnecessary END before metadata)
+*   `... ১০ই END মে END ...` (Incorrectly adding END after parts of a multi-word entity)
 
 Provide only the JSON array containing the correctly annotated sentences based precisely on these instructions.
 
@@ -313,57 +255,61 @@ Provide only the JSON array containing the correctly annotated sentences based p
 '''
     # *** REFINED BENGALI PROMPT ENDS HERE ***
 
-    max_retries = 3
-    retry_delay = 5 # seconds
+    max_retries = 3; retry_delay = 5 # seconds
     for attempt in range(max_retries):
         try:
-            model = genai.GenerativeModel("gemini-1.5-flash-latest")
-            # Optional: Adjust safety settings if overly restrictive (use with caution)
-            # safety_settings=[{"category": c, "threshold": "BLOCK_NONE"} for c in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
-            # response = model.generate_content(prompt, safety_settings=safety_settings)
+            if not genai:
+                 print("Error: genai object not available in annotate_batch_texts. Skipping.");
+                 raise ConnectionError("Google Generative AI not configured.")
+
+            model = genai.GenerativeModel("gemini-1.5-flash-latest") # Use a suitable model
             response = model.generate_content(prompt)
-
-            # --- Handle potential safety blocks ---
-            if not response.candidates:
-                 print(f"Warning: Gemini response blocked due to safety settings (Attempt {attempt+1}). Response parts: {response.parts}")
-                 # Return original text with error marker
-                 return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_SAFETY_BLOCK" for t in texts_to_annotate]
-
             assistant_reply = response.text.strip()
 
             # --- Robust JSON Extraction ---
             json_match = re.search(r'\[.*\]', assistant_reply, re.DOTALL)
             if json_match: json_str = json_match.group(0)
             else:
+                # Handle potential markdown ```json ... ```
                 if assistant_reply.startswith("```json"): assistant_reply = assistant_reply[len("```json"):].strip()
                 elif assistant_reply.startswith("```"): assistant_reply = assistant_reply[len("```"):].strip()
                 if assistant_reply.endswith("```"): assistant_reply = assistant_reply[:-len("```")].strip()
+
+                # Check if the cleaned string looks like a JSON list
                 if assistant_reply.startswith('[') and assistant_reply.endswith(']'): json_str = assistant_reply
                 else:
                     print(f"Error: Could not extract valid JSON list from response (Attempt {attempt+1}). Response snippet:\n---\n{assistant_reply[:500]}\n---")
-                    raise json.JSONDecodeError("Response does not appear to contain a JSON list.", assistant_reply, 0)
+                    # Fallback: Try parsing the whole response if it vaguely looks like JSON
+                    try:
+                        potential_json = json.loads(assistant_reply)
+                        if isinstance(potential_json, list):
+                            print("Warning: Extracted JSON by parsing the whole response.")
+                            json_str = assistant_reply
+                        else:
+                            raise json.JSONDecodeError("Response does not appear to contain a JSON list.", assistant_reply, 0)
+                    except json.JSONDecodeError:
+                         raise json.JSONDecodeError("Response does not appear to contain a JSON list.", assistant_reply, 0)
+
 
             # --- JSON Parsing and Post-Processing ---
             try: annotated_sentences_raw = json.loads(json_str)
             except json.JSONDecodeError as json_e:
-                print(f"JSON decoding failed on extracted string (Attempt {attempt+1}): {json_e}"); print("Extracted string snippet:", json_str[:500])
-                if attempt == max_retries - 1: return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_JSON_DECODE_FINAL" for t in texts_to_annotate]
-                raise json_e
+                print(f"JSON decoding failed specifically on extracted string (Attempt {attempt+1}): {json_e}"); print("Extracted string snippet:", json_str[:500]); raise json_e
 
             if isinstance(annotated_sentences_raw, list) and len(annotated_sentences_raw) == len(texts_to_annotate):
                 processed_sentences = []
                 for idx, sentence in enumerate(annotated_sentences_raw):
-                     if isinstance(sentence, str): processed_sentences.append(fix_end_tags_and_spacing(sentence))
+                     if isinstance(sentence, str): processed_sentences.append(fix_end_tags_and_spacing(sentence)) # Apply Bengali fixing rules
                      else:
-                          print(f"Warning: Non-string item received at index {idx}: {sentence}")
-                          original_text = texts_to_annotate[idx] if idx < len(texts_to_annotate) else "ORIGINAL_TEXT_OOB"
-                          processed_sentences.append(fix_end_tags_and_spacing(original_text) + " ANNOTATION_ERROR_NON_STRING")
-                if len(processed_sentences) == len(texts_to_annotate):
-                    print(f"Debug: Batch annotation successful (Attempt {attempt+1})."); return processed_sentences
+                          print(f"Warning: Non-string item received in annotation list at index {idx}: {sentence}")
+                          try: processed_sentences.append(fix_end_tags_and_spacing(texts_to_annotate[idx]) + " ANNOTATION_ERROR_NON_STRING")
+                          except IndexError: print(f"Error: Could not map non-string item at index {idx} back to original text."); processed_sentences.append("ANNOTATION_ERROR_UNKNOWN_ORIGINAL")
+
+                if len(processed_sentences) == len(texts_to_annotate): return processed_sentences # Success
                 else:
-                    print(f"Error: Mismatch after processing non-strings. Expected {len(texts_to_annotate)}, Got {len(processed_sentences)}")
+                    print(f"Error: Mismatch after processing non-string elements. Expected {len(texts_to_annotate)}, Got {len(processed_sentences)}")
                     if attempt == max_retries - 1: return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_PROCESSING" for t in texts_to_annotate]
-                    else: raise ValueError("Processing error led to length mismatch.")
+                    else: raise ValueError("Processing error lead to length mismatch.")
             else:
                 print(f"Error: API returned invalid list or mismatched length (Attempt {attempt+1}). Expected {len(texts_to_annotate)}, Got {len(annotated_sentences_raw) if isinstance(annotated_sentences_raw, list) else type(annotated_sentences_raw)}")
                 if attempt == max_retries - 1: return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_API_LENGTH" for t in texts_to_annotate]
@@ -374,14 +320,11 @@ Provide only the JSON array containing the correctly annotated sentences based p
             if attempt == max_retries - 1: return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_JSON_DECODE" for t in texts_to_annotate]
             print(f"Retrying annotation..."); time.sleep(retry_delay * (attempt + 1))
         except Exception as e:
-            print(f"Error calling/processing Generative AI (Attempt {attempt+1}/{max_retries}): {e}"); import traceback; traceback.print_exc()
-            if "rate limit" in str(e).lower(): time.sleep(retry_delay * (attempt + 1) * 5)
-            elif "API key not valid" in str(e) or "permission" in str(e).lower():
-                 print("FATAL: Invalid Google API Key or permission issue."); return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_API_KEY" for t in texts_to_annotate]
-            elif "response was blocked" in str(e).lower(): # Handle explicit block exception
-                 print(f"Warning: Gemini response blocked via exception (Attempt {attempt+1}).")
-                 if attempt == max_retries - 1: return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_SAFETY_BLOCK_FINAL" for t in texts_to_annotate]
-                 time.sleep(retry_delay * (attempt+1))
+            print(f"Error calling/processing Generative AI (Attempt {attempt+1}/{max_retries}): {e}")
+            import traceback; traceback.print_exc()
+            if "rate limit" in str(e).lower(): print("Rate limit likely hit."); time.sleep(retry_delay * (attempt + 1) * 5)
+            elif "API key not valid" in str(e) or "permission" in str(e).lower(): print("FATAL: Invalid Google API Key or permission issue."); return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_API_KEY" for t in texts_to_annotate]
+            elif "ConnectionError" in str(e): print("FATAL: GenAI not configured properly."); return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_NO_GENAI" for t in texts_to_annotate]
             else: time.sleep(retry_delay * (attempt + 1))
             if attempt == max_retries - 1: return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_API_CALL" for t in texts_to_annotate]
 
@@ -389,231 +332,323 @@ Provide only the JSON array containing the correctly annotated sentences based p
     return [fix_end_tags_and_spacing(t) + " ANNOTATION_ERROR_MAX_RETRIES" for t in texts_to_annotate]
 
 
-# --- *** MODIFIED Main Processing Function for Bengali *** ---
-def process_audio_and_annotate_bengali(
-    manifest_tsv_path: str,
-    audio_files_dir: str,
-    output_jsonl_path: str,
-    age_gender_model: AgeGenderModel, # Pass loaded models
-    processor: Wav2Vec2Processor,
-    emotion_model_info: Optional[dict],
-    batch_size: int = 10
-) -> None:
+# --- Main Processing Function for Bengali ---
+def process_bengali_json(input_json_path: str, output_jsonl_path: str, base_audio_path: str, batch_size: int = 10) -> None:
     """
-    Processes Bengali audio files and text from the specific utt_spk_text.tsv,
-    extracts metadata, formats text, annotates with AI (Bengali prompt),
-    and saves the final JSONL output.
+    Processes a Bengali JSON file, determines age group via fallback logic
+    (reassigned -> original -> predicted), predicts emotion, constructs absolute audio paths,
+    annotates text with Gemini, capitalizes domain tag, and saves final JSONL output.
 
     Args:
-        manifest_tsv_path (str): Path to the input utt_spk_text.tsv file.
-        audio_files_dir (str): Path to the directory containing .flac audio files.
-        output_jsonl_path (str): Path to save the output JSONL file.
-        age_gender_model: Loaded Age/Gender model.
-        processor: Loaded Wav2Vec2Processor.
-        emotion_model_info: Loaded Emotion model info dict (or None).
-        batch_size (int): Number of records to process before AI annotation/saving.
+        input_json_path: Path to the input JSON file.
+        output_jsonl_path: Path to save the output JSONL file.
+        base_audio_path: The absolute base directory where relative wav_paths start. REQUIRED.
+        batch_size: Number of records to process before calling Gemini API.
     """
-    output_dir = os.path.dirname(output_jsonl_path)
-    os.makedirs(output_dir, exist_ok=True)
+    if not base_audio_path or not os.path.isdir(base_audio_path):
+        print(f"FATAL ERROR: base_audio_path '{base_audio_path}' is required and must be a valid directory.")
+        return
 
-    # --- Clear/Create output file ---
+    output_parent_dir = os.path.dirname(output_jsonl_path)
+    os.makedirs(output_parent_dir, exist_ok=True)
+
+    # --- Clear output file ---
     try:
-        print(f"Attempting to clear/create output file: {output_jsonl_path}")
+        print(f"Attempting to clear output file: {output_jsonl_path}")
         with open(output_jsonl_path, 'w', encoding='utf-8') as f_clear: f_clear.write("")
-        print(f"Output file {output_jsonl_path} is ready.")
-    except IOError as e:
-        print(f"Error preparing output file {output_jsonl_path}: {e}. Processing stopped.")
+        print(f"Output file {output_jsonl_path} cleared successfully.")
+    except IOError as e: print(f"Error clearing output file {output_jsonl_path}: {e}. Please check permissions."); return
+
+    # --- Load Models ---
+    print("Loading models...")
+    # Emotion Model
+    emotion_model_name = "superb/hubert-large-superb-er"; emotion_model_info = {}
+    try:
+        emotion_model_info['model'] = AutoModelForAudioClassification.from_pretrained(emotion_model_name).to(device); emotion_model_info['model'].eval()
+        emotion_model_info['feature_extractor'] = AutoFeatureExtractor.from_pretrained(emotion_model_name)
+        print("Emotion model loaded.")
+    except Exception as e:
+        print(f"FATAL Error loading Emotion model: {e}. Cannot proceed without emotion model.")
         return
 
+    # Age Model (for fallback)
+    age_model = None; age_processor = None
+    age_model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
+    try:
+        age_processor = Wav2Vec2Processor.from_pretrained(age_model_name)
+        age_model = AgeGenderModel.from_pretrained(age_model_name).to(device); age_model.eval()
+        print("Age prediction model loaded (for fallback).")
+    except Exception as e:
+        print(f"Warning: Failed to load age prediction model ({e}). Age prediction fallback will not be available.")
+        age_model = None; age_processor = None # Ensure they are None if loading failed
+
     print("-" * 30)
-    print(f"Starting Bengali processing:")
-    print(f"  Manifest TSV: {manifest_tsv_path}")
-    print(f"  Audio Dir:    {audio_files_dir}")
-    print(f"  Output JSONL: {output_jsonl_path}")
-    print("-" * 30)
 
-    # Get audio paths, transcriptions, and speaker IDs using the Bengali TSV function
-    file_tuples = load_bengali_tsv(manifest_tsv_path, audio_files_dir)
-    if not file_tuples:
-        print(f"No valid audio-transcription data found from {manifest_tsv_path}. Exiting.")
-        return
+    # --- Load Input JSON Data ---
+    input_data = None
+    if not os.path.exists(input_json_path):
+        print(f"Error: Input JSON file not found: {input_json_path}"); return
+    try:
+        print(f"Loading Bengali data from {input_json_path}...")
+        with open(input_json_path, 'r', encoding='utf-8') as f:
+            input_data = json.load(f)
+        if not isinstance(input_data, dict) or not input_data:
+            print(f"Error: Input JSON does not contain a valid dictionary or is empty."); return
+        num_records = len(input_data)
+        print(f"Loaded {num_records} records from {input_json_path}.")
+    except json.JSONDecodeError as e: print(f"Error reading or parsing input JSON: {e}"); return
+    except Exception as e: print(f"An unexpected error occurred loading input JSON: {e}"); return
 
-    total_files = len(file_tuples)
-    print(f"Found {total_files} audio files with matching transcriptions and speakers to process.")
+    # --- Process Records ---
+    records_to_process = list(input_data.items())
+    total_records = len(records_to_process)
+    print(f"Starting processing of {total_records} Bengali records...")
+    print(f"Using Base Audio Directory: {base_audio_path}")
+    print(f"Output will be saved to: {output_jsonl_path}"); print("-" * 30)
 
-    processed_records_buffer = []
-    batch_num = 0; files_processed_count = 0; total_records_saved = 0
+    processed_records_buffer = []; batch_num = 0
+    files_processed_count = 0; total_records_saved = 0; skipped_records_count = 0
 
-    # --- Process Files ---
-    # Now loop through (audio_path, transcription, speaker_id) tuples
-    for i, (audio_path, transcription, speaker_id) in enumerate(file_tuples):
-        print(f"\nProcessing file {i+1}/{total_files}: {os.path.basename(audio_path)} (Speaker: {speaker_id})")
-        try:
-            # 1. Transcription & Speaker ID are already loaded
-            if not transcription: print(f"  Skipping: Empty transcription for {audio_path}"); continue
+    for i, (record_key, record_data) in enumerate(records_to_process):
+        print(f"\nProcessing record {i+1}/{total_records}: {record_key}")
+        final_age_group = "UNKNOWN" # Default age group
+        signal, sr = None, 16000 # Initialize audio variables
 
-            # 2. Load Audio
-            signal, sr, duration = None, 16000, 0
+        # --- 1. Validate and Extract Required Data ---
+        required_keys = ["wav_path", "text", "gender_reassigned", "domain", "duration"] # age_group/reassigned checked separately
+        missing_keys = [key for key in required_keys if key not in record_data]
+        if missing_keys:
+            print(f"  Skipping: Record missing required keys: {', '.join(missing_keys)}"); skipped_records_count += 1; continue
+
+        wav_path_relative = record_data["wav_path"]
+        text = record_data["text"]
+        gender = record_data["gender_reassigned"] # Using reassigned gender directly
+        domain = record_data["domain"]
+        duration = record_data["duration"]
+
+        if not text or not text.strip():
+             print(f"  Skipping: Record has empty text field."); skipped_records_count += 1; continue
+        if not isinstance(duration, (int, float)) or duration <= 0:
+             print(f"  Skipping: Invalid duration value ({duration})."); skipped_records_count += 1; continue
+
+        # --- 2. Determine Age Group using Fallback Logic ---
+        age_group_reassigned = record_data.get("age_group_reassigned")
+        age_group_original = record_data.get("age_group") # Get original age group as well
+
+        # Priority 1: Use age_group_reassigned if valid
+        if age_group_reassigned and str(age_group_reassigned).strip().upper() != 'NA':
+            final_age_group = str(age_group_reassigned).strip()
+            print(f"  Using age_group_reassigned: {final_age_group}")
+        # Priority 2: Use age_group if reassigned is NA and original is valid
+        elif age_group_original and str(age_group_original).strip().upper() != 'NA':
+            final_age_group = str(age_group_original).strip()
+            print(f"  Using original age_group (reassigned was NA): {final_age_group}")
+        # Priority 3: Predict from audio if both are NA (or missing)
+        else:
+            print("  Age from JSON is 'NA' or missing. Attempting prediction from audio...")
+            # Need to load audio first for prediction
+            audio_loaded_for_age = False
             try:
-                # Use soundfile primarily for flac
-                signal_raw, sr_orig = sf.read(audio_path, dtype='float32')
+                # Construct Absolute Audio Path
+                if wav_path_relative.startswith('/'): wav_path_relative = wav_path_relative[1:]
+                audio_path_abs = os.path.abspath(os.path.join(base_audio_path, wav_path_relative))
+                if not os.path.isfile(audio_path_abs):
+                    print(f"  Skipping: Audio file not found for age prediction: {audio_path_abs}")
+                    skipped_records_count += 1; continue # Skip if audio missing for prediction
+
+                # Load Audio Signal
+                try: signal_raw, sr_orig = sf.read(audio_path_abs, dtype='float32')
+                except Exception: signal_raw, sr_orig = librosa.load(audio_path_abs, sr=None, mono=False)
                 target_sr = 16000
                 if sr_orig != target_sr:
-                    if signal_raw.ndim > 1: signal_mono = np.mean(signal_raw, axis=1)
-                    else: signal_mono = signal_raw
-                    signal = librosa.resample(y=signal_mono.astype(np.float32), orig_sr=sr_orig, target_sr=target_sr)
-                    sr = target_sr
+                    signal_float = signal_raw.astype(np.float32) if not np.issubdtype(signal_raw.dtype, np.floating) else signal_raw
+                    signal_mono = np.mean(signal_float, axis=1) if signal_float.ndim > 1 else signal_float
+                    signal = librosa.resample(y=signal_mono, orig_sr=sr_orig, target_sr=target_sr); sr = target_sr
                 else:
-                    signal = signal_raw if signal_raw.ndim == 1 else np.mean(signal_raw, axis=1)
+                    signal = signal_raw.astype(np.float32) if not np.issubdtype(signal_raw.dtype, np.floating) else signal_raw
+                    if signal.ndim > 1: signal = np.mean(signal, axis=1)
                     sr = sr_orig
-                if signal is None or len(signal) == 0: print(f"  Skipping: Failed load/empty audio {audio_path}"); continue
-                duration = round(len(signal) / sr, 2)
-                if duration < 0.1: print(f"  Skipping: Audio too short ({duration:.2f}s) {audio_path}"); continue
-            except Exception as load_err: print(f"  Skipping: Error loading/processing audio {audio_path}: {load_err}"); continue
+                if signal is None or len(signal) == 0:
+                    print(f"  Skipping: Failed to load or empty audio for age prediction: {audio_path_abs}")
+                    skipped_records_count += 1; continue # Skip if audio loading fails
+                audio_loaded_for_age = True
 
-            # 3. Extract Age/Gender
-            age, gender = -1.0, "ERROR"
-            max_len_inference = 30 * sr # Limit input length
-            inputs, input_values, input_values_truncated = None, None, None
-            try:
-                inputs = processor(signal, sampling_rate=sr, return_tensors="pt", padding=True)
-                input_values = inputs.input_values
-                input_values_truncated = input_values[:, :max_len_inference].to(device) if input_values.shape[1] > max_len_inference else input_values.to(device)
-                with torch.no_grad(): _, logits_age, logits_gender = age_gender_model(input_values_truncated)
-                age = logits_age.cpu().numpy().item()
-                gender_idx = torch.argmax(logits_gender, dim=-1).cpu().numpy().item()
-                gender = {0: "FEMALE", 1: "MALE", 2: "OTHER"}.get(gender_idx, "UNKNOWN")
-            except RuntimeError as e:
-                 if "CUDA out of memory" in str(e): print(f"  CUDA OOM Error during Age/Gender. Skipping."); torch.cuda.empty_cache(); gc.collect(); continue
-                 else: print(f"  Runtime Error Age/Gender: {e}"); age = -1.0; gender = "ERROR"
-            except Exception as age_gender_err: print(f"  Error Age/Gender: {age_gender_err}"); age = -1.0; gender = "ERROR"
-
-            # 4. Extract Emotion
-            emotion = "ERROR"
-            try:
-                 emotion_signal = signal[:max_len_inference] if input_values is not None and input_values.shape[1] > max_len_inference else signal
-                 emotion = extract_emotion(emotion_signal, sr, emotion_model_info)
-            except Exception as emotion_err: print(f"  Error Emotion: {emotion_err}"); emotion = "ERROR"
-
-            # 5. Create Initial Record (Use speaker_id from TSV)
-            segment_data = AudioSegment(start_time=0, end_time=duration, speaker=speaker_id, age=age, gender=gender, transcription=transcription, emotion=emotion, chunk_filename=os.path.basename(audio_path), duration=duration)
-            chunk = ChunkData(segments=[segment_data], filepath=os.path.abspath(audio_path))
-            initial_formatted_text = chunk.get_formatted_text()
-            record = { "audio_filepath": chunk.filepath, "duration": duration, "initial_text": initial_formatted_text, "raw_transcription": transcription, "raw_age_output": age, "raw_gender_prediction": gender, "raw_emotion_prediction": emotion, "speaker_id": speaker_id } # Store speaker_id
-            processed_records_buffer.append(record)
-            files_processed_count += 1
-
-            # 6. Annotate and Save in Batches
-            if len(processed_records_buffer) >= batch_size or (i + 1) == total_files:
-                batch_num += 1; current_batch_size = len(processed_records_buffer)
-                print(f"\n--- Annotating Batch {batch_num} ({current_batch_size} records) ---")
-                texts_to_annotate = [rec["initial_text"] for rec in processed_records_buffer]
-                annotated_texts = annotate_batch_texts(texts_to_annotate) # Use Bengali prompt
-
-                if len(annotated_texts) != current_batch_size:
-                     print(f"  FATAL BATCH ERROR: Annotation count mismatch! Expected {current_batch_size}, Got {len(annotated_texts)}. Skipping save for this batch.")
+                # Predict Age if Model Loaded
+                if age_model and age_processor:
+                    raw_age_prediction = predict_age_from_audio(signal, sr, age_processor, age_model)
+                    if raw_age_prediction is not None:
+                        final_age_group = get_age_bucket_from_prediction(raw_age_prediction)
+                        print(f"  Predicted age group from audio: {final_age_group} (Raw: {raw_age_prediction:.4f})")
+                    else:
+                        print("  Age prediction from audio failed.")
+                        final_age_group = "UNKNOWN" # Keep default if prediction fails
                 else:
-                    try:
-                        lines_written_in_batch = 0
-                        with open(output_jsonl_path, 'a', encoding='utf-8') as f_out: # Append mode
-                            for record_data, annotated_text in zip(processed_records_buffer, annotated_texts):
-                                final_record = {"audio_filepath": record_data["audio_filepath"], "duration": record_data["duration"], "text": annotated_text} # Final JSONL structure
-                                if "ANNOTATION_ERROR" in annotated_text: print(f"  Warning: Saving record for {os.path.basename(record_data['audio_filepath'])} with annotation error: {annotated_text.split()[-1]}")
-                                json_str = json.dumps(final_record, ensure_ascii=False) # Handle Bengali script
-                                f_out.write(json_str + '\n'); lines_written_in_batch += 1
-                        total_records_saved += lines_written_in_batch
-                        print(f"--- Batch {batch_num} saved ({lines_written_in_batch} records). Total saved: {total_records_saved} ---")
-                    except IOError as io_err: print(f"  Error writing batch {batch_num} to {output_jsonl_path}: {io_err}")
-                    except Exception as write_err: print(f"  Unexpected error writing batch {batch_num}: {write_err}")
+                    print("  Age prediction model not loaded. Cannot predict age. Using UNKNOWN.")
+                    final_age_group = "UNKNOWN"
 
-                processed_records_buffer = [] # Clear buffer
-                # Explicit memory cleanup
-                del texts_to_annotate, annotated_texts
-                if inputs: del inputs;
-                if input_values: del input_values;
-                if input_values_truncated: del input_values_truncated;
-                if signal: del signal;
-                if 'signal_raw' in locals(): del signal_raw;
-                if 'signal_mono' in locals(): del signal_mono;
-                if 'logits_age' in locals(): del logits_age, logits_gender;
-                if 'emotion_signal' in locals(): del emotion_signal
-                if 'outputs' in locals() and outputs: del outputs
-                torch.cuda.empty_cache(); gc.collect()
+            except Exception as audio_err:
+                print(f"  Skipping: Error during audio loading/processing for age prediction: {audio_err}")
+                skipped_records_count += 1; continue # Skip record if audio handling fails here
 
-        except KeyboardInterrupt: print("\nProcessing interrupted by user."); return
-        except Exception as e:
-            print(f"  FATAL ERROR processing file {os.path.basename(audio_path)}: {e}")
-            import traceback; traceback.print_exc(); torch.cuda.empty_cache(); gc.collect(); continue # Try next file
+        # --- 3. Construct Absolute Audio Path (if not already done for age prediction) ---
+        # This step is now potentially redundant if age prediction happened, but ensures path exists for emotion.
+        try:
+            if 'audio_path_abs' not in locals() or not audio_path_abs: # Check if already defined
+                 if wav_path_relative.startswith('/'): wav_path_relative = wav_path_relative[1:]
+                 audio_path_abs = os.path.abspath(os.path.join(base_audio_path, wav_path_relative))
+                 if not os.path.isfile(audio_path_abs):
+                     print(f"  Skipping: Audio file path check failed: {audio_path_abs}")
+                     skipped_records_count += 1; continue
+        except Exception as path_err:
+            print(f"  Skipping: Error constructing absolute path: {path_err}")
+            skipped_records_count += 1; continue
 
-    print("\n" + "="*30 + f"\nBengali Processing Finished.\nTotal files processing attempted: {files_processed_count}/{total_files}\nTotal records saved to {output_jsonl_path}: {total_records_saved}\n" + "="*30)
+
+        # --- 4. Load Audio (if not already loaded for age prediction) ---
+        try:
+            if signal is None: # Check if audio needs loading (i.e., age came from JSON)
+                try: signal_raw, sr_orig = sf.read(audio_path_abs, dtype='float32')
+                except Exception: signal_raw, sr_orig = librosa.load(audio_path_abs, sr=None, mono=False)
+                target_sr = 16000
+                if sr_orig != target_sr:
+                    signal_float = signal_raw.astype(np.float32) if not np.issubdtype(signal_raw.dtype, np.floating) else signal_raw
+                    signal_mono = np.mean(signal_float, axis=1) if signal_float.ndim > 1 else signal_float
+                    signal = librosa.resample(y=signal_mono, orig_sr=sr_orig, target_sr=target_sr); sr = target_sr
+                else:
+                    signal = signal_raw.astype(np.float32) if not np.issubdtype(signal_raw.dtype, np.floating) else signal_raw
+                    if signal.ndim > 1: signal = np.mean(signal, axis=1)
+                    sr = sr_orig
+                if signal is None or len(signal) == 0:
+                    print(f"  Skipping: Failed to load or empty audio {audio_path_abs}"); skipped_records_count += 1; continue
+        except Exception as load_err:
+            print(f"  Skipping: Error loading audio {audio_path_abs}: {load_err}"); skipped_records_count += 1; continue
+
+        # --- 5. Extract Emotion ---
+        emotion = "ERROR"
+        try:
+            emotion = extract_emotion(signal, sr, emotion_model_info)
+            emotion = emotion.upper() # Ensure uppercase
+            if emotion in ["ERRORLOADINGMODEL", "NO_AUDIO", "OOM_ERROR", "RUNTIME_ERROR", "EXTRACTION_ERROR"]:
+                 print(f"  Warning: Emotion extraction failed with status: {emotion}")
+        except Exception as emotion_err:
+            print(f"  Error during emotion extraction call: {emotion_err}"); emotion = "ERROR"
+
+
+        # --- 6. Prepare Text for Gemini Annotation ---
+        # Use the determined final_age_group
+        safe_age = re.sub(r'\s+', '_', str(final_age_group))
+        safe_gender = re.sub(r'\s+', '_', str(gender).upper()) # Use gender from JSON
+        safe_emotion = re.sub(r'\s+', '_', str(emotion).upper())
+        safe_domain = re.sub(r'\s+', '_', str(domain).upper()) # Capitalize domain
+
+        initial_text_for_gemini = f"{text.strip()} AGE_{safe_age} GENDER_{safe_gender} EMOTION_{safe_emotion} DOMAIN_{safe_domain}"
+        # print(f"  Text prepared for Gemini: {initial_text_for_gemini}") # Debug print
+
+        # --- 7. Add to Batch Buffer ---
+        buffer_item = {
+            "audio_filepath": audio_path_abs, # Store the absolute path
+            "duration": duration,
+            "text_for_gemini": initial_text_for_gemini,
+            "original_key": record_key,
+            "determined_age_source": "reassigned" if (age_group_reassigned and str(age_group_reassigned).strip().upper() != 'NA') else \
+                                     "original" if (age_group_original and str(age_group_original).strip().upper() != 'NA') else \
+                                     "predicted" if final_age_group != "UNKNOWN" else "unknown" # Track age source
+        }
+        processed_records_buffer.append(buffer_item)
+        files_processed_count += 1
+
+        # --- 8. Annotate and Save in Batches ---
+        if len(processed_records_buffer) >= batch_size or (i + 1) == total_records:
+            batch_num += 1; current_batch_size = len(processed_records_buffer)
+            print(f"\n--- Annotating Batch {batch_num} ({current_batch_size} records) ---")
+            texts_to_annotate = [rec["text_for_gemini"] for rec in processed_records_buffer]
+            annotated_texts = annotate_batch_texts(texts_to_annotate) # Uses Bengali-specific func
+
+            if len(annotated_texts) != current_batch_size:
+                 print(f"  FATAL BATCH ERROR: Annotation count mismatch! Expected {current_batch_size}, Got {len(annotated_texts)}. Skipping save for this batch.")
+                 skipped_records_count += current_batch_size
+            else:
+                try:
+                    lines_written_in_batch = 0
+                    with open(output_jsonl_path, 'a', encoding='utf-8') as f_out:
+                        for record_data, annotated_text in zip(processed_records_buffer, annotated_texts):
+                            final_record = {
+                                "audio_filepath": record_data["audio_filepath"],
+                                "text": annotated_text,
+                                "duration": record_data["duration"]
+                                # Optional: Add age source if needed: "age_source": record_data["determined_age_source"]
+                            }
+                            if "ANNOTATION_ERROR" in annotated_text:
+                                print(f"  Warning: Saving record for key '{record_data['original_key']}' with error flag: {annotated_text.split()[-1]}")
+                            json_str = json.dumps(final_record, ensure_ascii=False)
+                            f_out.write(json_str + '\n'); lines_written_in_batch += 1
+                    total_records_saved += lines_written_in_batch
+                    print(f"--- Batch {batch_num} processed and saved ({lines_written_in_batch} records). Total saved: {total_records_saved} ---")
+                except IOError as io_err: print(f"  Error writing batch {batch_num} to {output_jsonl_path}: {io_err}")
+                except Exception as write_err: print(f"  Unexpected error writing batch {batch_num}: {write_err}")
+
+            # --- Clean up Batch Data and Memory ---
+            processed_records_buffer = []
+            del texts_to_annotate, annotated_texts
+            # Explicitly delete signal here as it's potentially large
+            if 'signal' in locals(): del signal
+            if 'signal_raw' in locals(): del signal_raw
+            if 'signal_float' in locals(): del signal_float
+            if 'signal_mono' in locals(): del signal_mono
+            torch.cuda.empty_cache(); gc.collect()
+
+        # --- Clean up per-record audio data ---
+        if 'signal' in locals(): del signal
+        if 'signal_raw' in locals(): del signal_raw
+        if 'signal_float' in locals(): del signal_float
+        if 'signal_mono' in locals(): del signal_mono
+        # Remove reference to absolute path variable for the next loop iteration
+        if 'audio_path_abs' in locals(): del audio_path_abs
+        gc.collect()
+
+
+    # --- Final Summary ---
+    print("\n" + "="*30); print("Processing Finished.")
+    print(f"Total records found in input JSON: {total_records}")
+    print(f"Records successfully processed (before annotation): {files_processed_count}")
+    print(f"Records skipped (missing data, audio error, path error, etc.): {skipped_records_count}")
+    print(f"Total records saved to {output_jsonl_path}: {total_records_saved}")
+    print("Note: Age group determined via fallback (reassigned -> original -> predicted).")
+    print("Note: Annotation errors within saved records are flagged in the 'text' field.")
+    print("="*30)
 
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    # --- *** Configuration for Bengali Data *** ---
-    # >>> SET THIS TO YOUR BENGALI DATASET LOCATION <<<
-    BENGALI_BASE_DIR = "/external4/datasets/madasr/asr_bengali"
-    # >>> SET DESIRED OUTPUT FILENAME <<<
-    FINAL_OUTPUT_JSONL = os.path.join(BENGALI_BASE_DIR, "bengali_annotated_output.jsonl")
-    # <<< END OF PATHS TO CHANGE <<<
+    # --- *** Configuration for Bengali *** ---
+    INPUT_JSON_FILE = "/external4/datasets/MADASR/IISc_RESPIN_dev/data/bn_meta_data.json"
+    FINAL_OUTPUT_JSONL = "/external4/datasets/MADASR/process_dev/bengali_output.jsonl"
+    BASE_AUDIO_DIRECTORY = "/external4/datasets/MADASR/IISc_RESPIN_dev"
+    PROCESSING_BATCH_SIZE = 10
 
-    PROCESSING_BATCH_SIZE = 10 # Adjust based on API limits/memory
-
-    # --- API Key Setup ---
+    # --- Verifications ---
     load_dotenv()
-    if not os.getenv("GOOGLE_API_KEY") and genai is None:
-        print("ERROR: GOOGLE_API_KEY not found and GenAI not configured. Set in .env or environment."); exit(1)
-    elif genai is None: # Attempt re-config if key might be available now
-        print("Attempting Google GenAI configuration again...")
-        try:
-             api_key_recheck = os.getenv("GOOGLE_API_KEY")
-             if not api_key_recheck: raise ValueError("GOOGLE_API_KEY still not found.")
-             genai.configure(api_key=api_key_recheck)
-             print("Google Generative AI re-configured successfully.")
-        except Exception as e: print(f"ERROR: Failed to configure Google GenAI on retry: {e}"); exit(1)
+    if not os.getenv("GOOGLE_API_KEY"): print("ERROR: GOOGLE_API_KEY not set."); exit(1)
+    if genai is None: print("ERROR: Google Generative AI failed to configure."); exit(1)
+    if not BASE_AUDIO_DIRECTORY or not os.path.isdir(BASE_AUDIO_DIRECTORY):
+         print(f"ERROR: BASE_AUDIO_DIRECTORY ('{BASE_AUDIO_DIRECTORY}') is not set or is not a valid directory."); exit(1)
+    if not os.path.isfile(INPUT_JSON_FILE): print(f"ERROR: Input JSON file not found: {INPUT_JSON_FILE}"); exit(1)
+    output_dir = os.path.dirname(FINAL_OUTPUT_JSONL)
+    try: os.makedirs(output_dir, exist_ok=True); print(f"Output directory created/exists: {output_dir}")
+    except OSError as e: print(f"Error creating output directory {output_dir}: {e}"); exit(1)
 
-    # --- Load Models ONCE ---
-    print("Loading models...")
-    loaded_processor = None; loaded_age_gender_model = None; loaded_emotion_model_info = {}
-    try: # Age/Gender
-        age_gender_model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
-        loaded_processor = Wav2Vec2Processor.from_pretrained(age_gender_model_name)
-        loaded_age_gender_model = AgeGenderModel.from_pretrained(age_gender_model_name).to(device)
-        loaded_age_gender_model.eval(); print("Age/Gender model loaded.")
-    except Exception as e: print(f"FATAL Error loading Age/Gender model: {e}"); exit(1)
-    try: # Emotion
-        emotion_model_name = "superb/hubert-large-superb-er"
-        loaded_emotion_model_info['model'] = AutoModelForAudioClassification.from_pretrained(emotion_model_name).to(device)
-        loaded_emotion_model_info['model'].eval()
-        loaded_emotion_model_info['feature_extractor'] = AutoFeatureExtractor.from_pretrained(emotion_model_name)
-        print("Emotion model loaded.")
-    except Exception as e: print(f"Warning: Error loading Emotion model: {e}. Using 'ErrorLoadingModel'."); loaded_emotion_model_info = None
-
-    print("-" * 30)
-    print("Starting Bengali Audio Processing and Annotation Workflow...")
-    print(f"Input Base Directory: {BENGALI_BASE_DIR}")
-    print(f"Final Output File:    {FINAL_OUTPUT_JSONL}")
+    print("Starting Bengali JSON Processing with Age Fallback Logic...")
+    print(f"Input JSON File: {INPUT_JSON_FILE}")
+    print(f"Final Output File: {FINAL_OUTPUT_JSONL}")
+    print(f"Base Audio Directory: {BASE_AUDIO_DIRECTORY}")
     print(f"Processing Batch Size: {PROCESSING_BATCH_SIZE}")
     print("-" * 30)
 
-    # --- Define Paths for Bengali Data ---
-    manifest_path = os.path.join(BENGALI_BASE_DIR, "utt_spk_text.tsv")
-    audio_directory = os.path.join(BENGALI_BASE_DIR, "data")
-
-    # --- Check Paths ---
-    if not os.path.isdir(BENGALI_BASE_DIR): print(f"ERROR: Base directory not found: {BENGALI_BASE_DIR}"); exit(1)
-    if not os.path.isfile(manifest_path): print(f"ERROR: Manifest TSV not found: {manifest_path}"); exit(1)
-    if not os.path.isdir(audio_directory): print(f"ERROR: Audio directory not found: {audio_directory}"); exit(1)
-
-    # --- Run Processing ---
-    process_audio_and_annotate_bengali(
-        manifest_tsv_path=manifest_path,
-        audio_files_dir=audio_directory,
+    process_bengali_json(
+        input_json_path=INPUT_JSON_FILE,
         output_jsonl_path=FINAL_OUTPUT_JSONL,
-        age_gender_model=loaded_age_gender_model,
-        processor=loaded_processor,
-        emotion_model_info=loaded_emotion_model_info,
+        base_audio_path=BASE_AUDIO_DIRECTORY,
         batch_size=PROCESSING_BATCH_SIZE
     )
 
-    print("\nWorkflow complete for Bengali dataset.")
+    print("Bengali Workflow with Age Fallback complete.")

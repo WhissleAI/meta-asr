@@ -773,8 +773,8 @@ if __name__ == "__main__":
     # --- *** Configuration for Hindi Data (e.g., Vaani-like Structure) *** ---
     # ---> !! IMPORTANT: UPDATE THESE PATHS TO YOUR HINDI DATASET !! <---
     #      The base directory should contain 'audio' and 'metadata' subdirectories.
-    BASE_AUDIO_META_DIR = "/path/to/your/hindi/data/hi"  # UPDATE THIS PATH (use 'hi' or appropriate code)
-    FINAL_OUTPUT_JSONL = "/path/to/your/hindi/data/hi/hi_corpus_annotated.jsonl" # UPDATE THIS PATH
+    BASE_AUDIO_META_DIR = "/external4/datasets/madasr/Vaani-transcription-part/Hindi"  # UPDATE THIS PATH (use 'hi' or appropriate code)
+    FINAL_OUTPUT_JSONL = "/external4/datasets/madasr/Vaani-transcription-part/Hindi/hi_corpus_annotated.jsonl" # UPDATE THIS PATH
     PROCESSING_BATCH_SIZE = 10 # Adjust based on API limits and memory (10 is usually safe)
 
     # --- API Key and Setup (Unchanged) ---

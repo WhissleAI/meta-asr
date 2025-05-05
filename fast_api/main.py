@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os
 import gc
 import re
@@ -27,24 +26,23 @@ from fastapi import (
     File, UploadFile, Form, Query
 )
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field as PydanticField # Alias to avoid conflict
+from pydantic import BaseModel, Field as PydanticField
 import uvicorn
 
 from dotenv import load_dotenv
 
-# --- Model Imports ---
+
 import torch.nn as nn
 from transformers import (
     AutoModelForAudioClassification,
     AutoFeatureExtractor,
     Wav2Vec2Processor,
     Wav2Vec2PreTrainedModel,
-    Wav2Vec2Model # Added for AgeGenderModel definition
+    Wav2Vec2Model
 )
 
 import google.generativeai as genai
 
-# Try importing WhissleClient - handle potential import error
 try:
     from whissle import WhissleClient
     WHISSLE_AVAILABLE = True
@@ -53,7 +51,6 @@ except ImportError:
     WHISSLE_AVAILABLE = False
     class WhissleClient: pass # Dummy class
 
-# --- Configuration & Setup ---
 load_dotenv()
 
 # Configure logging
@@ -139,7 +136,7 @@ try:
     age_gender_model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
     age_gender_processor = Wav2Vec2Processor.from_pretrained(age_gender_model_name)
     age_gender_model = AgeGenderModel.from_pretrained(age_gender_model_name).to(device)
-    age_gender_model.eval() # Set to evaluation mode
+    age_gender_model.eval()
     logger.info("Age/Gender model loaded successfully.")
 except Exception as e:
     logger.error(f"Failed to load Age/Gender model: {e}", exc_info=True)

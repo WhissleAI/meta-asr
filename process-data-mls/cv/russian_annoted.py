@@ -611,8 +611,8 @@ def process_audio_and_annotate(manifest_path: str, base_data_dir: str, output_js
 # --- Main Execution (Unchanged) ---
 if __name__ == "__main__":
     # --- *** Configuration for Russian Data *** ---
-    BASE_DATA_DIR = "/external4/datasets/russian-cv/train"
-    MANIFEST_FILENAME = "manifest.json"
+    BASE_DATA_DIR = "/external4/datasets/russian_opensr_cv"
+    MANIFEST_FILENAME = "manifest_raw.jsonl"
     FINAL_OUTPUT_JSONL = os.path.join(BASE_DATA_DIR, "ru_annotated_data_v2.jsonl") # Changed output name slightly
     PROCESSING_BATCH_SIZE = 10
     MANIFEST_FILE_PATH = os.path.join(BASE_DATA_DIR, MANIFEST_FILENAME)

@@ -19,7 +19,7 @@ def transcribe_audio(audio_path, mime_type="audio/wav"):
     Transcribe audio using Gemini, handling noise and empty audio.
     Returns an empty string if no speech is detected.
     """
-    # Use Gemini 2.0 Flash model which is the latest and best for this task
+
     model_name = "models/gemini-2.0-flash"
     
     model = genai.GenerativeModel(model_name)

@@ -26,6 +26,7 @@ from fastapi import (
     File, UploadFile, Form, Query
 )
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field as PydanticField
 import uvicorn
 
@@ -51,7 +52,7 @@ except ImportError:
     WHISSLE_AVAILABLE = False
     class WhissleClient: pass # Dummy class
 
-load_dotenv()
+load_dotenv('/home/dchauhan/workspace/meta-asr/applications/.env')
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(module)s - %(funcName)s - %(message)s')
@@ -75,6 +76,15 @@ app = FastAPI(
     description="Transcribes audio, optionally predicts Age/Gender/Emotion, annotates Intent/Entities, "
                 "and saves results to a JSONL manifest file.",
     version="1.4.1" # Incremented version for fixes
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Allow Next.js frontend origin
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
 )
 
 # --- Model Loading ---
@@ -173,6 +183,11 @@ class ProcessRequest(BaseModel):
     directory_path: str = PydanticField(..., description="Absolute path to the directory containing audio files.", example="/path/to/audio")
     model_choice: ModelChoice = PydanticField(..., description="The transcription model to use.")
     output_jsonl_path: str = PydanticField(..., description="Absolute path for the output JSONL file.", example="/path/to/output/results.jsonl")
+    annotations: Optional[List[str]] = PydanticField(
+        None,
+        description="List of annotations to include (age, gender, emotion, entity, intent).",
+        example=["age", "gender", "emotion"]
+    )
 
 class TranscriptionJsonlRecord(BaseModel):
     audio_filepath: str
@@ -632,111 +647,329 @@ async def create_transcription_manifest_endpoint(process_request: ProcessRequest
     msg = f"Processed {processed_files_count}/{len(audio_files)}. Saved: {saved_records_count}. Errors: {error_count}."
     return ProcessResponse(message=msg, output_file=str(output_jsonl_path), processed_files=processed_files_count, saved_records=saved_records_count, errors=error_count)
 
+# @app.post("/create_annotated_manifest/", response_model=ProcessResponse, summary="Create Annotated Manifest")
+# async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
+#     model_choice = process_request.model_choice
+#     if model_choice == ModelChoice.whissle and not WHISSLE_CONFIGURED: raise HTTPException(status_code=400, detail="Whissle not configured.")
+#     if not GEMINI_CONFIGURED: raise HTTPException(status_code=400, detail="Gemini not configured (required for annotation).")
+    
+#     models_missing = []
+#     if age_gender_model is None: models_missing.append("Age/Gender")
+#     if emotion_model is None: models_missing.append("Emotion")
+#     if models_missing: logger.warning(f"Annotation models not loaded: {', '.join(models_missing)}. Proceeding without these.")
+
+#     dir_path, output_jsonl_path = validate_paths(process_request.directory_path, process_request.output_jsonl_path)
+#     audio_files = discover_audio_files(dir_path)
+
+#     if not audio_files:
+#         try:
+#             with open(output_jsonl_path, "w", encoding="utf-8") as _: pass
+#         except IOError as e: raise HTTPException(status_code=500, detail=f"Failed to create empty output file: {e}")
+#         return ProcessResponse(message=f"No audio files. Empty manifest created.", output_file=str(output_jsonl_path), processed_files=0, saved_records=0, errors=0)
+
+#     processed_files_count = 0; saved_records_count = 0; error_count = 0
+#     try:
+#         with open(output_jsonl_path, "w", encoding="utf-8") as outfile:
+#             for audio_file in audio_files:
+#                 file_error_details: List[str] = []; combined_text: Optional[str] = None; duration: Optional[float] = None
+#                 audio_data: Optional[np.ndarray] = None; sample_rate: Optional[int] = None
+#                 transcription_text: Optional[str] = None; age_gender_emotion_tags: str = ""
+#                 logger.info(f"--- Processing {audio_file.name} (Full Annotation) ---")
+#                 processed_files_count += 1
+#                 try:
+#                     duration = get_audio_duration(audio_file)
+#                     audio_data, sample_rate, load_err = load_audio(audio_file, TARGET_SAMPLE_RATE)
+#                     if load_err: file_error_details.append(load_err)
+#                     elif audio_data is None or sample_rate != TARGET_SAMPLE_RATE: file_error_details.append("Audio load/SR mismatch.")
+
+#                     if model_choice == ModelChoice.whissle: transcription_text, transcription_error = await transcribe_with_whissle_single(audio_file)
+#                     else: transcription_text, transcription_error = await transcribe_with_gemini_single(audio_file)
+#                     if transcription_error: file_error_details.append(f"Transcription: {transcription_error}")
+#                     elif transcription_text is None: file_error_details.append("Transcription returned None.")
+#                     else: transcription_text = transcription_text.strip()
+
+#                     age_pred, gender_idx, emotion_label = None, None, None
+#                     if audio_data is not None and sample_rate == TARGET_SAMPLE_RATE:
+#                         try:
+#                             age_gender_task = asyncio.to_thread(predict_age_gender, audio_data, TARGET_SAMPLE_RATE)
+#                             emotion_task = asyncio.to_thread(predict_emotion, audio_data, TARGET_SAMPLE_RATE)
+#                             age_gender_result, emotion_result = await asyncio.gather(age_gender_task, emotion_task)
+#                             age_pred, gender_idx, age_gender_err = age_gender_result
+#                             if age_gender_err: file_error_details.append(f"A/G_WARN: {age_gender_err}")
+#                             emotion_label, emotion_err = emotion_result
+#                             if emotion_err: file_error_details.append(f"EMO_WARN: {emotion_err}")
+#                         except Exception as pred_e: file_error_details.append(f"A/G/E Error: {pred_e}")
+#                     elif not ("Audio load/SR mismatch" in " ".join(file_error_details) or load_err):
+#                         file_error_details.append("Skipped A/G/E (audio load issue).")
+                    
+#                     age_gender_emotion_tags = format_age_gender_emotion_tags(age_pred, gender_idx, emotion_label)
+
+#                     if transcription_text is not None and transcription_text != "":
+#                         text_with_pre_tags = f"{transcription_text} {age_gender_emotion_tags}".strip()
+#                         gemini_annotated_text, gemini_err = await annotate_text_with_gemini(text_with_pre_tags)
+#                         if gemini_err:
+#                             file_error_details.append(f"ANNOTATION_FAIL: {gemini_err}")
+#                             combined_text = text_with_pre_tags
+#                             if not re.search(r'\sINTENT_[A-Z_0-9]+$', combined_text): combined_text = f"{combined_text.strip()} INTENT_ANNOTATION_FAILED".strip()
+#                         elif gemini_annotated_text is None or gemini_annotated_text.strip() == "":
+#                             file_error_details.append("ANNOTATION_EMPTY: Gemini returned empty.")
+#                             combined_text = text_with_pre_tags
+#                             if not re.search(r'\sINTENT_[A-Z_0-9]+$', combined_text): combined_text = f"{combined_text.strip()} INTENT_ANNOTATION_EMPTY".strip()
+#                         else: combined_text = gemini_annotated_text
+#                     elif transcription_text == "":
+#                         combined_text = f"[NO_SPEECH] {age_gender_emotion_tags}".strip()
+#                         combined_text = f"{combined_text.strip()} INTENT_NO_SPEECH".strip()
+#                     else: # Transcription failed
+#                         combined_text = f"[TRANSCRIPTION_FAILED] {age_gender_emotion_tags}".strip()
+#                         combined_text = f"{combined_text.strip()} INTENT_TRANSCRIPTION_FAILED".strip()
+#                 except Exception as e:
+#                     file_error_details.append(f"Unexpected error: {type(e).__name__}: {e}")
+#                     if not combined_text: combined_text = f"[PROCESSING_ERROR] {age_gender_emotion_tags}".strip(); combined_text = f"{combined_text.strip()} INTENT_PROCESSING_ERROR".strip()
+
+#                 final_error_msg = "; ".join(file_error_details) if file_error_details else None
+#                 record = AnnotatedJsonlRecord(audio_filepath=str(audio_file.resolve()), text=combined_text, duration=duration, model_used_for_transcription=model_choice.value, error=final_error_msg)
+                
+#                 current_errors_before_write = error_count
+#                 try: outfile.write(record.model_dump_json(exclude_none=True) + "\n")
+#                 except Exception as write_e:
+#                     logger.error(f"Failed to write annotated record for {audio_file.name}: {write_e}", exc_info=True)
+#                     if not final_error_msg: final_error_msg = f"JSONL write error: {write_e}" # This might not be captured on record if record is already formed
+#                     # Ensure error_count is incremented if write fails, even if processing was 'ok'
+#                     if error_count == current_errors_before_write and not file_error_details: # Only inc if no other proc error already counted it
+#                          error_count += 1
+                
+#                 # Increment error count IF there were processing errors OR if final_error_msg now includes a write error
+#                 # and it wasn't counted by the write exception block
+#                 if file_error_details: # If any processing error occurred
+#                     if error_count == current_errors_before_write: # Ensure it's counted once
+#                         error_count +=1
+#                 elif not file_error_details and not final_error_msg : # No processing errors, no write errors
+#                      saved_records_count += 1
+#                 # If final_error_msg has something but file_error_details was empty, it implies write error was the only issue
+#                 # This is tricky to count perfectly without more state; the current logic prioritizes counting if any error string is present.
+
+#                 del audio_data; gc.collect()
+#                 if torch.cuda.is_available(): torch.cuda.empty_cache()
+#         logger.info(f"Finished full annotation. Attempted {processed_files_count} records.")
+#     except IOError as e: raise HTTPException(status_code=500, detail=f"Failed to write output file: {e}")
+
+# selective annotation 
 @app.post("/create_annotated_manifest/", response_model=ProcessResponse, summary="Create Annotated Manifest")
 async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
     model_choice = process_request.model_choice
-    if model_choice == ModelChoice.whissle and not WHISSLE_CONFIGURED: raise HTTPException(status_code=400, detail="Whissle not configured.")
-    if not GEMINI_CONFIGURED: raise HTTPException(status_code=400, detail="Gemini not configured (required for annotation).")
-    
-    models_missing = []
-    if age_gender_model is None: models_missing.append("Age/Gender")
-    if emotion_model is None: models_missing.append("Emotion")
-    if models_missing: logger.warning(f"Annotation models not loaded: {', '.join(models_missing)}. Proceeding without these.")
+    if model_choice == ModelChoice.whissle and not WHISSLE_CONFIGURED:
+        raise HTTPException(status_code=400, detail="Whissle not configured.")
+    if process_request.annotations and "entity" in process_request.annotations or "intent" in process_request.annotations:
+        if not GEMINI_CONFIGURED:
+            raise HTTPException(status_code=400, detail="Gemini not configured (required for entity/intent annotation).")
+
+    # Validate annotations
+    valid_annotations = {"age", "gender", "emotion", "entity", "intent"}
+    if process_request.annotations:
+        invalid_annotations = set(process_request.annotations) - valid_annotations
+        if invalid_annotations:
+            raise HTTPException(status_code=400, detail=f"Invalid annotations: {invalid_annotations}")
 
     dir_path, output_jsonl_path = validate_paths(process_request.directory_path, process_request.output_jsonl_path)
     audio_files = discover_audio_files(dir_path)
 
     if not audio_files:
         try:
-            with open(output_jsonl_path, "w", encoding="utf-8") as _: pass
-        except IOError as e: raise HTTPException(status_code=500, detail=f"Failed to create empty output file: {e}")
-        return ProcessResponse(message=f"No audio files. Empty manifest created.", output_file=str(output_jsonl_path), processed_files=0, saved_records=0, errors=0)
+            with open(output_jsonl_path, "w", encoding="utf-8") as _:
+                pass
+        except IOError as e:
+            raise HTTPException(status_code=500, detail=f"Failed to create empty output file: {e}")
+        return ProcessResponse(
+            message="No audio files. Empty manifest created.",
+            output_file=str(output_jsonl_path),
+            processed_files=0,
+            saved_records=0,
+            errors=0
+        )
 
-    processed_files_count = 0; saved_records_count = 0; error_count = 0
+    processed_files_count = 0
+    saved_records_count = 0
+    error_count = 0
+
     try:
         with open(output_jsonl_path, "w", encoding="utf-8") as outfile:
             for audio_file in audio_files:
-                file_error_details: List[str] = []; combined_text: Optional[str] = None; duration: Optional[float] = None
-                audio_data: Optional[np.ndarray] = None; sample_rate: Optional[int] = None
-                transcription_text: Optional[str] = None; age_gender_emotion_tags: str = ""
-                logger.info(f"--- Processing {audio_file.name} (Full Annotation) ---")
+                file_error_details: List[str] = []
+                combined_text: Optional[str] = None
+                duration: Optional[float] = None
+                audio_data: Optional[np.ndarray] = None
+                sample_rate: Optional[int] = None
+                transcription_text: Optional[str] = None
+                age_gender_emotion_tags: str = ""
+                logger.info(f"--- Processing {audio_file.name} (Selective Annotation) ---")
                 processed_files_count += 1
+
                 try:
                     duration = get_audio_duration(audio_file)
-                    audio_data, sample_rate, load_err = load_audio(audio_file, TARGET_SAMPLE_RATE)
-                    if load_err: file_error_details.append(load_err)
-                    elif audio_data is None or sample_rate != TARGET_SAMPLE_RATE: file_error_details.append("Audio load/SR mismatch.")
+                    if process_request.annotations and any(a in ["age", "gender", "emotion"] for a in process_request.annotations):
+                        audio_data, sample_rate, load_err = load_audio(audio_file, TARGET_SAMPLE_RATE)
+                        if load_err:
+                            file_error_details.append(load_err)
+                        elif audio_data is None or sample_rate != TARGET_SAMPLE_RATE:
+                            file_error_details.append("Audio load/SR mismatch.")
 
-                    if model_choice == ModelChoice.whissle: transcription_text, transcription_error = await transcribe_with_whissle_single(audio_file)
-                    else: transcription_text, transcription_error = await transcribe_with_gemini_single(audio_file)
-                    if transcription_error: file_error_details.append(f"Transcription: {transcription_error}")
-                    elif transcription_text is None: file_error_details.append("Transcription returned None.")
-                    else: transcription_text = transcription_text.strip()
+                    if model_choice == ModelChoice.whissle:
+                        transcription_text, transcription_error = await transcribe_with_whissle_single(audio_file)
+                    else:
+                        transcription_text, transcription_error = await transcribe_with_gemini_single(audio_file)
+                    if transcription_error:
+                        file_error_details.append(f"Transcription: {transcription_error}")
+                    elif transcription_text is None:
+                        file_error_details.append("Transcription returned None.")
+                    else:
+                        transcription_text = transcription_text.strip()
 
                     age_pred, gender_idx, emotion_label = None, None, None
-                    if audio_data is not None and sample_rate == TARGET_SAMPLE_RATE:
+                    if process_request.annotations and audio_data is not None and sample_rate == TARGET_SAMPLE_RATE:
                         try:
-                            age_gender_task = asyncio.to_thread(predict_age_gender, audio_data, TARGET_SAMPLE_RATE)
-                            emotion_task = asyncio.to_thread(predict_emotion, audio_data, TARGET_SAMPLE_RATE)
-                            age_gender_result, emotion_result = await asyncio.gather(age_gender_task, emotion_task)
-                            age_pred, gender_idx, age_gender_err = age_gender_result
-                            if age_gender_err: file_error_details.append(f"A/G_WARN: {age_gender_err}")
-                            emotion_label, emotion_err = emotion_result
-                            if emotion_err: file_error_details.append(f"EMO_WARN: {emotion_err}")
-                        except Exception as pred_e: file_error_details.append(f"A/G/E Error: {pred_e}")
-                    elif not ("Audio load/SR mismatch" in " ".join(file_error_details) or load_err):
-                        file_error_details.append("Skipped A/G/E (audio load issue).")
-                    
-                    age_gender_emotion_tags = format_age_gender_emotion_tags(age_pred, gender_idx, emotion_label)
+                            tasks = []
+                            if "age" in process_request.annotations or "gender" in process_request.annotations:
+                                tasks.append(asyncio.to_thread(predict_age_gender, audio_data, TARGET_SAMPLE_RATE))
+                            if "emotion" in process_request.annotations:
+                                tasks.append(asyncio.to_thread(predict_emotion, audio_data, TARGET_SAMPLE_RATE))
+                            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                            for result in results:
+                                if isinstance(result, tuple) and len(result) == 3:  # Age/Gender
+                                    age_pred, gender_idx, age_gender_err = result
+                                    if age_gender_err:
+                                        file_error_details.append(f"A/G_WARN: {age_gender_err}")
+                                elif isinstance(result, tuple) and len(result) == 2:  # Emotion
+                                    emotion_label, emotion_err = result
+                                    if emotion_err:
+                                        file_error_details.append(f"EMO_WARN: {emotion_err}")
+
+                        except Exception as pred_e:
+                            file_error_details.append(f"A/G/E Error: {pred_e}")
+
+                    # Format only requested tags
+                    if process_request.annotations:
+                        tags = []
+                        if "age" in process_request.annotations and age_pred is not None:
+                            try:
+                                actual_age = round(age_pred, 1)
+                                age_brackets = [
+                                    (18, "0_17"), (25, "18_24"), (35, "25_34"),
+                                    (45, "35_44"), (55, "45_54"), (65, "55_64"),
+                                    (float('inf'), "65PLUS")
+                                ]
+                                age_tag = "UNKNOWN"
+                                for threshold, bracket in age_brackets:
+                                    if actual_age < threshold:
+                                        age_tag = bracket
+                                        break
+                                tags.append(f"AGE_{age_tag}")
+                            except Exception as age_e:
+                                logger.error(f"Error formatting age tag: {age_e}")
+                                tags.append("AGE_ERROR")
+                        elif "age" in process_request.annotations:
+                            tags.append("AGE_UNKNOWN")
+
+                        if "gender" in process_request.annotations and gender_idx is not None:
+                            if gender_idx == 1:
+                                tags.append("GENDER_MALE")
+                            elif gender_idx == 0:
+                                tags.append("GENDER_FEMALE")
+                            else:
+                                tags.append("GENDER_UNKNOWN")
+                        elif "gender" in process_request.annotations:
+                            tags.append("GENDER_UNKNOWN")
+
+                        if "emotion" in process_request.annotations and emotion_label and emotion_label != "SHORT_AUDIO":
+                            emotion_tag = emotion_label.upper().replace(" ", "_")
+                            tags.append(f"EMOTION_{emotion_tag}")
+                        elif "emotion" in process_request.annotations and emotion_label == "SHORT_AUDIO":
+                            tags.append("EMOTION_SHORT_AUDIO")
+                        elif "emotion" in process_request.annotations:
+                            tags.append("EMOTION_UNKNOWN")
+
+                        age_gender_emotion_tags = " ".join(tags)
 
                     if transcription_text is not None and transcription_text != "":
-                        text_with_pre_tags = f"{transcription_text} {age_gender_emotion_tags}".strip()
-                        gemini_annotated_text, gemini_err = await annotate_text_with_gemini(text_with_pre_tags)
-                        if gemini_err:
-                            file_error_details.append(f"ANNOTATION_FAIL: {gemini_err}")
+                        text_with_pre_tags = f"{transcription_text} {age_gender_emotion_tags}".strip() if age_gender_emotion_tags else transcription_text
+                        if process_request.annotations and any(a in ["entity", "intent"] for a in process_request.annotations):
+                            gemini_annotated_text, gemini_err = await annotate_text_with_gemini(text_with_pre_tags)
+                            if gemini_err:
+                                file_error_details.append(f"ANNOTATION_FAIL: {gemini_err}")
+                                combined_text = text_with_pre_tags
+                                if "intent" in process_request.annotations and not re.search(r'\sINTENT_[A-Z_0-9]+$', combined_text):
+                                    combined_text = f"{combined_text.strip()} INTENT_ANNOTATION_FAILED".strip()
+                            elif gemini_annotated_text is None or gemini_annotated_text.strip() == "":
+                                file_error_details.append("ANNOTATION_EMPTY: Gemini returned empty.")
+                                combined_text = text_with_pre_tags
+                                if "intent" in process_request.annotations and not re.search(r'\sINTENT_[A-Z_0-9]+$', combined_text):
+                                    combined_text = f"{combined_text.strip()} INTENT_ANNOTATION_EMPTY".strip()
+                            else:
+                                combined_text = gemini_annotated_text
+                        else:
                             combined_text = text_with_pre_tags
-                            if not re.search(r'\sINTENT_[A-Z_0-9]+$', combined_text): combined_text = f"{combined_text.strip()} INTENT_ANNOTATION_FAILED".strip()
-                        elif gemini_annotated_text is None or gemini_annotated_text.strip() == "":
-                            file_error_details.append("ANNOTATION_EMPTY: Gemini returned empty.")
-                            combined_text = text_with_pre_tags
-                            if not re.search(r'\sINTENT_[A-Z_0-9]+$', combined_text): combined_text = f"{combined_text.strip()} INTENT_ANNOTATION_EMPTY".strip()
-                        else: combined_text = gemini_annotated_text
                     elif transcription_text == "":
-                        combined_text = f"[NO_SPEECH] {age_gender_emotion_tags}".strip()
-                        combined_text = f"{combined_text.strip()} INTENT_NO_SPEECH".strip()
-                    else: # Transcription failed
-                        combined_text = f"[TRANSCRIPTION_FAILED] {age_gender_emotion_tags}".strip()
-                        combined_text = f"{combined_text.strip()} INTENT_TRANSCRIPTION_FAILED".strip()
+                        combined_text = f"[NO_SPEECH] {age_gender_emotion_tags}".strip() if age_gender_emotion_tags else "[NO_SPEECH]"
+                        if process_request.annotations and "intent" in process_request.annotations:
+                            combined_text = f"{combined_text.strip()} INTENT_NO_SPEECH".strip()
+                    else:
+                        combined_text = f"[TRANSCRIPTION_FAILED] {age_gender_emotion_tags}".strip() if age_gender_emotion_tags else "[TRANSCRIPTION_FAILED]"
+                        if process_request.annotations and "intent" in process_request.annotations:
+                            combined_text = f"{combined_text.strip()} INTENT_TRANSCRIPTION_FAILED".strip()
+
                 except Exception as e:
                     file_error_details.append(f"Unexpected error: {type(e).__name__}: {e}")
-                    if not combined_text: combined_text = f"[PROCESSING_ERROR] {age_gender_emotion_tags}".strip(); combined_text = f"{combined_text.strip()} INTENT_PROCESSING_ERROR".strip()
+                    if not combined_text:
+                        combined_text = f"[PROCESSING_ERROR] {age_gender_emotion_tags}".strip() if age_gender_emotion_tags else "[PROCESSING_ERROR]"
+                        if process_request.annotations and "intent" in process_request.annotations:
+                            combined_text = f"{combined_text.strip()} INTENT_PROCESSING_ERROR".strip()
 
                 final_error_msg = "; ".join(file_error_details) if file_error_details else None
-                record = AnnotatedJsonlRecord(audio_filepath=str(audio_file.resolve()), text=combined_text, duration=duration, model_used_for_transcription=model_choice.value, error=final_error_msg)
-                
+                record = AnnotatedJsonlRecord(
+                    audio_filepath=str(audio_file.resolve()),
+                    text=combined_text,
+                    duration=duration,
+                    model_used_for_transcription=model_choice.value,
+                    error=final_error_msg
+                )
+
                 current_errors_before_write = error_count
-                try: outfile.write(record.model_dump_json(exclude_none=True) + "\n")
+                try:
+                    outfile.write(record.model_dump_json(exclude_none=True) + "\n")
                 except Exception as write_e:
                     logger.error(f"Failed to write annotated record for {audio_file.name}: {write_e}", exc_info=True)
-                    if not final_error_msg: final_error_msg = f"JSONL write error: {write_e}" # This might not be captured on record if record is already formed
-                    # Ensure error_count is incremented if write fails, even if processing was 'ok'
-                    if error_count == current_errors_before_write and not file_error_details: # Only inc if no other proc error already counted it
-                         error_count += 1
-                
-                # Increment error count IF there were processing errors OR if final_error_msg now includes a write error
-                # and it wasn't counted by the write exception block
-                if file_error_details: # If any processing error occurred
-                    if error_count == current_errors_before_write: # Ensure it's counted once
-                        error_count +=1
-                elif not file_error_details and not final_error_msg : # No processing errors, no write errors
-                     saved_records_count += 1
-                # If final_error_msg has something but file_error_details was empty, it implies write error was the only issue
-                # This is tricky to count perfectly without more state; the current logic prioritizes counting if any error string is present.
+                    if not final_error_msg:
+                        final_error_msg = f"JSONL write error: {write_e}"
+                    if error_count == current_errors_before_write and not file_error_details:
+                        error_count += 1
 
-                del audio_data; gc.collect()
-                if torch.cuda.is_available(): torch.cuda.empty_cache()
-        logger.info(f"Finished full annotation. Attempted {processed_files_count} records.")
-    except IOError as e: raise HTTPException(status_code=500, detail=f"Failed to write output file: {e}")
+                if file_error_details:
+                    if error_count == current_errors_before_write:
+                        error_count += 1
+                elif not file_error_details and not final_error_msg:
+                    saved_records_count += 1
+
+                del audio_data
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+        truly_successful_saves = processed_files_count - error_count
+        final_message = (
+            f"Processed {processed_files_count}/{len(audio_files)} files for selective annotation. "
+            f"Attempted to save {processed_files_count} records. "
+            f"{truly_successful_saves} records are considered fully successful (no errors reported). "
+            f"{error_count} files encountered errors or warnings (check 'error' field in JSONL)."
+        )
+        return ProcessResponse(
+            message=final_message,
+            output_file=str(output_jsonl_path),
+            processed_files=processed_files_count,
+            saved_records=truly_successful_saves,
+            errors=error_count
+        )
+    except IOError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write output file: {e}")
 
     # Adjust final saved_records_count based on errors. If total processed is X and errors is Y, saved is X-Y.
     # This provides a clearer picture than trying to perfectly sync saved_records_count increments within the loop.

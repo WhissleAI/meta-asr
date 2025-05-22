@@ -51,19 +51,17 @@ except ImportError:
     class WhissleClient: pass # Dummy class
 
 try:
-    import ollama
-    from ollama import chat as ollama_chat_func 
+    from ollama import chat
     OLLAMA_SDK_AVAILABLE = True
 except ImportError:
     print("Warning: Ollama SDK not found or failed to import. Ollama model will be unavailable.")
     OLLAMA_SDK_AVAILABLE = False
-    class ollama: 
-        class Client:
-            def __init__(self, host=None): pass
-            def chat(self, model, messages, stream=False): pass
+    # Define a dummy chat function for when Ollama is not available
+    def chat(model, messages, stream=False): 
+        raise Exception("Ollama SDK not available")
+    class ollama:
         class APIError(Exception): pass
-        class ResponseError(APIError): pass 
-    def ollama_chat_func(model, messages, stream=False): pass 
+        class ResponseError(APIError): pass
 
 
 load_dotenv()
@@ -83,7 +81,6 @@ GEMINI_CONFIGURED = False
 WHISSLE_CONFIGURED = False
 OLLAMA_CONFIGURED = False
 OLLAMA_MODEL_TO_USE: Optional[str] = None
-OLLAMA_CLIENT: Optional[ollama.Client] = None 
 
 
 AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg', '.m4a']
@@ -193,19 +190,15 @@ if OLLAMA_SDK_AVAILABLE:
     if OLLAMA_MODEL_NAME_ENV:
         OLLAMA_MODEL_TO_USE = OLLAMA_MODEL_NAME_ENV
         try:
-            temp_client = ollama.Client(host=OLLAMA_API_BASE_URL_ENV)
-            temp_client.show(OLLAMA_MODEL_TO_USE) 
-            OLLAMA_CLIENT = temp_client 
+            # Simple test to verify the model exists
+            test_response = chat(
+                model=OLLAMA_MODEL_TO_USE,
+                messages=[{'role': 'user', 'content': 'test'}]
+            )
             logger.info(f"Ollama configured and verified with model '{OLLAMA_MODEL_TO_USE}' at '{OLLAMA_API_BASE_URL_ENV}'.")
             OLLAMA_CONFIGURED = True
-        except ollama.ResponseError as e:
-            if hasattr(e, 'status_code') and e.status_code == 404:
-                 logger.error(f"Ollama model '{OLLAMA_MODEL_TO_USE}' not found at '{OLLAMA_API_BASE_URL_ENV}'. Please pull the model. Error: {e}")
-            else:
-                 logger.error(f"Ollama API error during client initialization/model check for '{OLLAMA_MODEL_TO_USE}' at '{OLLAMA_API_BASE_URL_ENV}'. Status: {e.status_code if hasattr(e, 'status_code') else 'N/A'}. Error: {e}")
-            OLLAMA_CONFIGURED = False
         except Exception as e: 
-            logger.error(f"Failed to initialize/verify Ollama client with model '{OLLAMA_MODEL_TO_USE}' at '{OLLAMA_API_BASE_URL_ENV}': {e}")
+            logger.error(f"Failed to verify Ollama with model '{OLLAMA_MODEL_TO_USE}' at '{OLLAMA_API_BASE_URL_ENV}': {e}")
             OLLAMA_CONFIGURED = False
     else:
         logger.warning("Warning: OLLAMA_MODEL_NAME environment variable not set. Ollama features will be unavailable.")
@@ -251,6 +244,8 @@ class CustomAnnotatedJsonlRecord(BaseModel): # New model for the desired output 
     gender: Optional[str] = Field(None, description="Predicted gender (e.g., Male, Female, Unknown)")
     age_group: Optional[str] = Field(None, description="Predicted age group (e.g., 18-24, 65+)")
     emotion: Optional[str] = Field(None, description="Predicted emotion (e.g., Happy, Neutral, Unknown)")
+    transcription_model: str = Field(..., description="The model used for transcription (e.g., gemini, whissle)")
+    annotation_model: str = Field(..., description="The model used for annotation (e.g., gemini, ollama)")
 
 # --- Utility Functions ---
 def load_audio(audio_path: Path, target_sr: int = TARGET_SAMPLE_RATE) -> Tuple[Optional[np.ndarray], Optional[int], Optional[str]]:
@@ -425,12 +420,14 @@ async def _annotate_text_llm_common(text_to_annotate: str, llm_provider: Annotat
         if not OLLAMA_CONFIGURED or not OLLAMA_MODEL_TO_USE: return text_to_annotate, f"Ollama not configured or model not set (current: {OLLAMA_MODEL_TO_USE or 'Not Set'})."
         logger.info(f"Annotating with Ollama (model: '{OLLAMA_MODEL_TO_USE}', input: '{cleaned_text_for_prompt[:100]}...')")
         try:
-            response_data = await asyncio.to_thread(ollama_chat_func, model=OLLAMA_MODEL_TO_USE, messages=[{'role': 'user', 'content': prompt}])
-            if response_data and isinstance(response_data, dict) and response_data.get('message', {}).get('content'):
-                annotated_text = response_data['message']['content'].strip()
-            else: error_detail = f"Unexpected Ollama response: {str(response_data)[:200]}"
-        except ollama.ResponseError as e: error_detail = f"Ollama API ResponseError: Status {e.status_code if hasattr(e, 'status_code') else 'N/A'}. {str(e)[:200]}"
-        except ollama.APIError as e: error_detail = f"Ollama APIError: {str(e)[:200]}"
+            response = await asyncio.to_thread(
+                chat,
+                model=OLLAMA_MODEL_TO_USE,
+                messages=[{'role': 'user', 'content': prompt}]
+            )
+            if response and hasattr(response, 'message') and hasattr(response.message, 'content'):
+                annotated_text = response.message.content.strip()
+            else: error_detail = f"Unexpected Ollama response format: {str(response)[:200]}"
         except Exception as e: error_detail = f"Ollama annotation error: {type(e).__name__}: {e}"
 
     if error_detail: return text_to_annotate, error_detail
@@ -553,7 +550,10 @@ async def create_transcription_manifest_endpoint(process_request: ProcessRequest
                     else: text = text.strip()
                 except Exception as e: file_err = f"Unexpected error: {type(e).__name__}: {e}"
                 
-                record = TranscriptionJsonlRecord(audio_filepath=str(audio_file.resolve()), text=text, duration=duration_val, model_used_for_transcription=trans_model.value, error=file_err)
+                # Get specific model name
+                transcription_model_name = trans_model.value
+                
+                record = TranscriptionJsonlRecord(audio_filepath=str(audio_file.resolve()), text=text, duration=duration_val, model_used_for_transcription=transcription_model_name, error=file_err)
                 try: outfile.write(record.model_dump_json(exclude_none=True) + "\n")
                 except Exception as write_e: file_err = f"{file_err or ''}; JSONL write error: {write_e}".strip('; ')
                 if file_err: errors += 1
@@ -643,6 +643,14 @@ async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
                 # 4. Parse final fields for CustomAnnotatedJsonlRecord
                 parsed_output_fields = parse_custom_output_fields(llm_annotated_text)
 
+                # Get specific model names where available
+                transcription_model_name = trans_model.value
+                annotation_model_name = annot_provider.value
+                
+                # If Ollama, include the specific model name
+                if annot_provider == AnnotationModelProvider.ollama and OLLAMA_MODEL_TO_USE:
+                    annotation_model_name = f"{annotation_model_name}:{OLLAMA_MODEL_TO_USE}"
+                
                 custom_record = CustomAnnotatedJsonlRecord(
                     audio_filepath=str(audio_file.resolve()),
                     text=parsed_output_fields["text_with_entities"],
@@ -650,7 +658,9 @@ async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
                     task_name=parsed_output_fields["task_name"],
                     gender=parsed_output_fields["gender"],
                     age_group=parsed_output_fields["age_group"],
-                    emotion=parsed_output_fields["emotion"]
+                    emotion=parsed_output_fields["emotion"],
+                    transcription_model=transcription_model_name,
+                    annotation_model=annotation_model_name
                 )
                 
                 try:
@@ -683,9 +693,27 @@ async def get_status():
         "message": "Welcome to the Audio Processing API v1.6.0",
         "docs_url": "/docs", "html_interface": "/",
         "endpoints": { "transcription_only": "/create_transcription_manifest/", "full_annotation": "/create_annotated_manifest/" },
-        "transcription_models": { "gemini_configured": GEMINI_CONFIGURED, "whissle_available": WHISSLE_AVAILABLE, "whissle_configured": WHISSLE_CONFIGURED, },
-        "annotation_providers": { "gemini_configured": GEMINI_CONFIGURED, "ollama_sdk_available": OLLAMA_SDK_AVAILABLE, "ollama_configured": OLLAMA_CONFIGURED, "ollama_model_used": OLLAMA_MODEL_TO_USE if OLLAMA_CONFIGURED else "N/A", "ollama_api_base_url": OLLAMA_API_BASE_URL_ENV, },
-        "local_prediction_models": { "age_gender_model_loaded": age_gender_model is not None, "emotion_model_loaded": emotion_model is not None, },
+        "transcription_models": { 
+            "gemini_configured": GEMINI_CONFIGURED, 
+            "gemini_model": "gemini-1.5-flash" if GEMINI_CONFIGURED else "N/A",
+            "whissle_available": WHISSLE_AVAILABLE, 
+            "whissle_configured": WHISSLE_CONFIGURED,
+            "whissle_model": "en-US-0.6b" if WHISSLE_CONFIGURED else "N/A"
+        },
+        "annotation_providers": { 
+            "gemini_configured": GEMINI_CONFIGURED, 
+            "gemini_model": "gemini-1.5-pro-latest" if GEMINI_CONFIGURED else "N/A",
+            "ollama_sdk_available": OLLAMA_SDK_AVAILABLE, 
+            "ollama_configured": OLLAMA_CONFIGURED, 
+            "ollama_model_used": OLLAMA_MODEL_TO_USE if OLLAMA_CONFIGURED else "N/A", 
+            "ollama_api_base_url": OLLAMA_API_BASE_URL_ENV
+        },
+        "local_prediction_models": { 
+            "age_gender_model_loaded": age_gender_model is not None, 
+            "age_gender_model_name": "audeering/wav2vec2-large-robust-6-ft-age-gender" if age_gender_model is not None else "N/A",
+            "emotion_model_loaded": emotion_model is not None,
+            "emotion_model_name": "superb/hubert-large-superb-er" if emotion_model is not None else "N/A"
+        },
         "compute_device": str(device)
     }
 

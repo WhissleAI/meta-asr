@@ -413,7 +413,36 @@ def annotate_batch_texts_ollama(texts_to_annotate: List[str]) -> List[Dict[str, 
             response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages, format='json') 
             assistant_reply = response['message']['content'].strip()
 
+            # ADDED DEBUGGING
+            print(f"--- Ollama Annotation Debug ---")
+            print(f"Input texts_to_annotate count: {len(texts_to_annotate)}")
+            print(f"Ollama raw response length: {len(assistant_reply)}")
+            print(f"Ollama raw response (first 1000 chars): >>>\n{assistant_reply[:1000]}\n<<<")
+            # END ADDED DEBUGGING
+
             parsed_results = parse_llm_bio_output(assistant_reply, texts_to_annotate)
+
+            # ADDED DEBUGGING
+            print(f"Parsed results count: {len(parsed_results)}")
+            if parsed_results:
+                print(f"First parsed result example: {parsed_results[0] if parsed_results else 'N/A'}")
+                if len(texts_to_annotate) > 0 and len(parsed_results) == len(texts_to_annotate):
+                    match_ok = True
+                    for idx, (orig, parsed) in enumerate(zip(texts_to_annotate, parsed_results)):
+                        if not ("tokens" in parsed and "tags" in parsed and "intent" in parsed):
+                            print(f"  Problem with parsed result at index {idx}: {parsed}")
+                            match_ok = False
+                            break
+                        if not parsed.get("tokens") and orig: # Original text was there, but tokens are empty or missing
+                            print(f"  Empty/missing tokens for non-empty original text at index {idx}. Original: '{orig}', Parsed: {parsed}")
+                    if match_ok:
+                         print(f"All parsed results seem to have tokens, tags, and intent fields.")
+                elif len(texts_to_annotate) > 0 and len(parsed_results) != len(texts_to_annotate):
+                    print(f"  Length mismatch: Expected {len(texts_to_annotate)} input texts, Got {len(parsed_results)} parsed results.")
+            elif len(texts_to_annotate) > 0:
+                 print(f"  Parsed results list is empty, but expected {len(texts_to_annotate)} results.")
+            print(f"--- End Ollama Annotation Debug ---")
+            # END ADDED DEBUGGING
 
             if len(parsed_results) == len(texts_to_annotate) and all("tokens" in p and "tags" in p for p in parsed_results):
                 return parsed_results

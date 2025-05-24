@@ -241,7 +241,6 @@ ENTITY_TYPES = [
     "WEBSITE", "URL", "IP_ADDRESS", "MAC_ADDRESS", "USERNAME", "PASSWORD", "LANGUAGE", "CODE_SNIPPET", "DATABASE_NAME",
     "API_KEY", "WEB_TOKEN", "URL_PARAMETER", "SERVER_NAME", "ENDPOINT", "DOMAIN"
 ]
-
 def get_annotation_prompt(texts_to_annotate: List[str]) -> str:
     """
     Generates the core prompt for BIO entity and utterance-level intent annotation.

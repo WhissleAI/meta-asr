@@ -9,7 +9,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
+
 from transformers import (
     AutoModelForAudioClassification,
     AutoFeatureExtractor,
@@ -19,6 +20,7 @@ from transformers import (
 )
 import torch.nn as nn
 import google.generativeai as genai
+import ollama # Import the ollama client
 import time
 
 # --- Initial Setup ---
@@ -43,10 +45,24 @@ try:
         raise ValueError("GOOGLE_API_KEY environment variable not found.")
     print("Google Generative AI configured successfully.")
 except Exception as e:
-    print(f"Error configuring or testing Google Generative AI: {e}. Annotation step will likely fail.")
+    print(f"Error configuring Google Generative AI: {e}. Gemini annotation will be skipped if chosen.")
     genai = None
 
-# --- Age/Gender Model Definition (Script 1 - unchanged) ---
+# Configure Ollama
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:12b") # Changed to gemma:7b for broader availability
+ollama_client = None
+try:
+    ollama_client = ollama.Client(host=OLLAMA_HOST)
+    # Test connection
+    ollama_client.list() 
+    print(f"Ollama client configured for model '{OLLAMA_MODEL}' at '{OLLAMA_HOST}'.")
+except Exception as e:
+    print(f"Error configuring Ollama client or connecting: {e}. Ollama annotation will be skipped if chosen.")
+    ollama_client = None
+
+
+# --- Age/Gender Model Definition (unchanged) ---
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
         super().__init__()
@@ -80,14 +96,14 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         logits_gender = torch.softmax(self.gender(hidden_states_pooled), dim=-1)
         return hidden_states_pooled, logits_age, logits_gender
 
-# --- Emotion Extraction Function (Script 1 - unchanged) ---
+# --- Emotion Extraction Function (unchanged) ---
 def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000, model_info: dict = None) -> str:
     if model_info is None or 'model' not in model_info or 'feature_extractor' not in model_info:
         print("Error: Emotion model not loaded correctly.")
         return "ErrorLoadingModel"
     if audio_data is None or len(audio_data) == 0:
         return "No_Audio"
-    if len(audio_data) < sampling_rate * 0.1: # Allow very short audio for feature extraction, filter later if needed
+    if len(audio_data) < sampling_rate * 0.1: 
         pass
 
     try:
@@ -108,16 +124,16 @@ def extract_emotion(audio_data: np.ndarray, sampling_rate: int = 16000, model_in
         return "Extraction_Error"
 
 
-# --- Data Structures ---
+# --- Data Structures (unchanged) ---
 @dataclass
 class AudioSegment:
     start_time: float
     end_time: float
     speaker: str
-    age: float
-    gender: str
-    transcription: str # This will now store lowercase transcription
-    emotion: str
+    age: float 
+    gender: str 
+    transcription: str 
+    emotion: str 
     chunk_filename: str
     duration: float
 
@@ -126,37 +142,25 @@ class ChunkData:
     segments: List[AudioSegment] = field(default_factory=list)
     filepath: str = ""
 
-    def get_formatted_text(self) -> str:
-        if not self.segments: return ""
-        segment = self.segments[0] # Assuming one segment per chunk for this NPTEL structure
-        age_bucket = self.get_age_bucket(segment.age)
-        gender_text = segment.gender
-        emotion_text = segment.emotion.upper()
-        transcription = segment.transcription.strip() # Transcription is already lowercase
-        metadata = f"AGE_{age_bucket} GENDER_{gender_text} EMOTION_{emotion_text}"
-        return f"{transcription.strip()} {metadata.strip()}"
-
     @staticmethod
     def get_age_bucket(age: float) -> str:
-        actual_age = round(age * 100)
-        age_brackets = [
-            (18, "0_18"), (30, "18_30"), (45, "30_45"),
-            (60, "45_60"), (float('inf'), "60PLUS")
-        ]
-        for threshold, bracket in age_brackets:
-            if actual_age < threshold: return bracket
-        return "60PLUS"
+        """
+        Maps a raw age prediction (0-1 float, scaled to 0-100) to an age group string.
+        """
+        actual_age = round(age * 100) 
+        if actual_age <= 17:
+            return "0-17"
+        elif actual_age <= 29: 
+            return "18-29"
+        elif actual_age <= 44: 
+            return "30-44"
+        elif actual_age <= 59: 
+            return "45-59"
+        else: 
+            return "60+"
 
-# --- File Handling (NEW - for NPTEL structure) ---
+# --- File Handling (unchanged) ---
 def get_nptel_file_data(dataset_base_dir: str) -> List[Tuple[str, str]]:
-    """
-    Scans the NPTEL dataset structure to find audio files and their corresponding transcriptions.
-    Args:
-        dataset_base_dir: The root directory of a specific NPTEL dataset (e.g., .../english_190).
-                          This directory should contain 'Audio' and 'transcription' subfolders.
-    Returns:
-        A list of tuples, where each tuple is (audio_filepath, transcription_text).
-    """
     audio_root_dir = os.path.join(dataset_base_dir, "Audio")
     transcription_root_dir = os.path.join(dataset_base_dir, "transcription")
 
@@ -185,7 +189,7 @@ def get_nptel_file_data(dataset_base_dir: str) -> List[Tuple[str, str]]:
                                 audio_basename, text_content = parts
                                 transcriptions_map[audio_basename] = text_content
                             else:
-                                if line.strip(): # Only warn if the line wasn't empty
+                                if line.strip(): 
                                     print(f"    Warning: Malformed line {line_num+1} in {text_file_path}: '{line.strip()}'")
                 except Exception as e:
                     print(f"    Error reading transcription file {text_file_path}: {e}")
@@ -201,7 +205,7 @@ def get_nptel_file_data(dataset_base_dir: str) -> List[Tuple[str, str]]:
         if audio_file_name.lower().endswith('.wav'):
             wav_files_found += 1
             audio_basename = os.path.splitext(audio_file_name)[0]
-            audio_full_path = os.path.join(audio_root_dir, audio_file_name)
+            audio_full_path = os.path.join(audio_root_dir, audio_file_name) 
 
             if audio_basename in transcriptions_map:
                 file_data_list.append((audio_full_path, transcriptions_map[audio_basename]))
@@ -218,73 +222,9 @@ def get_nptel_file_data(dataset_base_dir: str) -> List[Tuple[str, str]]:
     return file_data_list
 
 
-# --- AI Annotation Functions (unchanged from original) ---
-def correct_entity_tag_spaces(text: str) -> str:
-    if not isinstance(text, str): return text
-    
-    def replace_spaces(match):
-        tag_part = match.group(1)
-        type_part = tag_part[len("ENTITY_"):]
-        corrected_type = type_part.replace(' ', '')
-        return f"ENTITY_{corrected_type}"
+# --- Core Annotation Prompt and Post-Processing Logic ---
 
-    pattern = r'\b(ENTITY_[A-Z0-9_ ]*?[A-Z0-9_])(?=\s+\S)'
-    corrected_text = re.sub(pattern, replace_spaces, text)
-    return corrected_text
-
-def fix_end_tags_and_spacing(text: str) -> str:
-    if not isinstance(text, str):
-        return text
-
-    text = correct_entity_tag_spaces(text) # Ensure this is called first
-    text = text.strip()
-    text = re.sub(r'\s+', ' ', text) # Normalize spaces
-    text = re.sub(r'\s+END\s+(\b(?:AGE_|GENDER_|EMOTION_|INTENT_)|$)', r' \1', text) # Fix END before metadata
-    text = re.sub(r'\s+END\s+END\b', ' END', text) # Consolidate multiple ENDs
-    text = re.sub(r'\s+END\s+END\b', ' END', text) # Repeat for safety
-
-    # Add END if missing before metadata or another ENTITY, or end of string
-    pattern_add_end = r'(ENTITY_[A-Z0-9_]+\s+\S.*?)(?<!\sEND)(?=\s+(\bAGE_|\bGENDER_|\bEMOTION_|\bINTENT_|\bENTITY_)|$)'
-    text = re.sub(pattern_add_end, r'\1 END', text)
-
-    # Ensure space after ENTITY_TAG and before entity text
-    text = re.sub(r'(ENTITY_[A-Z0-9_]+)(\S)', r'\1 \2', text)
-    # Ensure space before END tag
-    text = re.sub(r'(\S)(END\b)', r'\1 \2', text)
-
-    # Fix spacing around punctuation
-    text = re.sub(r'\s+([?!:;,.])', r'\1', text) # Remove space before punctuation
-    text = re.sub(r'([?!:;,.])(\w)', r'\1 \2', text) # Add space after punctuation if followed by a word
-
-    text = re.sub(r'\s+', ' ', text).strip() # Final normalization
-    return text
-
-def annotate_batch_texts(texts_to_annotate: List[str]):
-    if not genai:
-        print("Error: Google Generative AI not configured. Skipping annotation.")
-        return texts_to_annotate
-    if not texts_to_annotate:
-        return []
-
-    prompt = f'''You are an expert linguistic annotator for English text.
-You will receive a list of English sentences. Each sentence already includes metadata tags (AGE_*, GENDER_*, EMOTION_*) at the end.
-The English transcription part will be in lowercase.
-
-Your task is crucial and requires precision:
-1.  **PRESERVE EXISTING TAGS:** Keep the `AGE_`, `GENDER_`, and `EMOTION_` tags exactly as they appear at the end of each sentence. DO NOT modify or move them.
-2.  **ENTITY ANNOTATION (English Text Only):** Identify entities ONLY within the lowercase English transcription part of the sentence. Use ONLY the entity types from the provided list.
-3.  **ENTITY TAG FORMAT (VERY IMPORTANT):**
-    *   Insert the tag **BEFORE** the entity: `ENTITY_<TYPE>` (e.g., `ENTITY_CITY`, `ENTITY_PERSON_NAME`).
-    *   **NO SPACES** are allowed within the `<TYPE>` part (e.g., use `PERSON_NAME`, NOT `PERSON_ NAM E`).
-    *   Immediately **AFTER** the English entity text, add a single space followed by `END`.
-    *   Example (assuming input "i saw maria in london yesterday."): `... i saw ENTITY_PERSON_NAME maria END in ENTITY_CITY london END yesterday. ...`
-    *   **DO NOT** add an `END` tag just before the `AGE_`, `GENDER_`, `EMOTION_` tags unless it belongs to a preceding entity.
-4.  **INTENT TAG:** Determine the single primary intent of the English transcription (e.g., INFORM, QUESTION, REQUEST, COMMAND, GREETING, etc.). Add ONE `INTENT_<INTENT_TYPE>` tag at the absolute end of the entire string, AFTER all other tags.
-5.  **OUTPUT FORMAT:** Return a JSON array of strings, where each string is a fully annotated sentence adhering to all rules.
-6.  **ENGLISH SPECIFICS:** Handle English script, punctuation (like '.', '?', '!'), and spacing correctly according to standard English rules. Ensure proper spacing around the inserted tags. The entity text you select from the input will be lowercase; preserve this casing in your output within the `ENTITY_TAG ... END` block.
-
-**ENTITY TYPES LIST (USE ONLY THESE):**
-[
+ENTITY_TYPES = [
     "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",
     "DATE", "TIME", "DURATION", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "DEADLINE", "DELIVERY_DATE", "DELIVERY_TIME",
     "EVENT", "MEETING", "TASK", "PROJECT_NAME", "ACTION_ITEM", "PRIORITY", "FEEDBACK", "REVIEW", "RATING", "COMPLAINT",
@@ -302,100 +242,280 @@ Your task is crucial and requires precision:
     "API_KEY", "WEB_TOKEN", "URL_PARAMETER", "SERVER_NAME", "ENDPOINT", "DOMAIN"
 ]
 
-**Example Input String (now lowercase):**
-"i saw maria in london yesterday. AGE_30_45 GENDER_FEMALE EMOTION_NEUTRAL"
+def get_annotation_prompt(texts_to_annotate: List[str]) -> str:
+    """
+    Generates the core prompt for BIO entity and utterance-level intent annotation.
+    """
+    # Define common intent types, these should also appear in the tags if no entity is found
+    INTENT_TYPES = ["INFORM", "QUESTION", "REQUEST", "COMMAND", "GREETING", "CONFIRMATION", "NEGATION", 
+                    "ACKNOWLEDGEMENT", "INQUIRY", "FAREWELL", "APOLOGY", "THANKS", "COMPLAINT", 
+                    "FEEDBACK", "SUGGESTION", "ASSISTANCE", "NAVIGATION", "TRANSACTION", "SCHEDULING",
+                    "UNKNOWN_INTENT"] # Added UNKNOWN_INTENT for robust handling
 
-**CORRECT Example Output String (entities are lowercase as in input):**
-"i saw ENTITY_PERSON_NAME maria END in ENTITY_CITY london END yesterday. AGE_30_45 GENDER_FEMALE EMOTION_NEUTRAL INTENT_INFORM"
+    all_entity_types_str = ", ".join(ENTITY_TYPES)
+    all_intent_types_str = ", ".join(INTENT_TYPES)
 
-**INCORRECT Example Output String (Spaces in Tag):**
-"i saw ENTITY_PERSON_ NAM E maria END in ENTITY_CIT Y london END yesterday. AGE_30_45 GENDER_FEMALE EMOTION_NEUTRAL INTENT_INFORM"
+    return f'''You are an expert linguistic annotator for English text.
+You will receive a list of English sentences. Each sentence is a raw lowercase transcription.
 
-**INCORRECT Example Output String (Extra END before metadata):**
-"i saw ENTITY_PERSON_NAME maria END in ENTITY_CITY london END yesterday. END AGE_30_45 GENDER_FEMALE EMOTION_NEUTRAL INTENT_INFORM"
+Your task is crucial and requires precision. For each sentence, you must:
+1.  **TOKENIZE:** Split the sentence into individual words (tokens).
+2.  **ASSIGN BIO TAGS:** For each token, assign exactly one BIO tag according to the following rules:
+    *   **ENTITY TAGS (Priority):** Identify entities using the provided `ENTITY_TYPES` list.
+        *   `B-<ENTITY_TYPE>` for the *beginning* of an entity phrase (e.g., `B-PERSON_NAME`).
+        *   `I-<ENTITY_TYPE>` for *inside* an entity phrase (e.g., `I-PERSON_NAME`).
+    *   **UTTERANCE INTENT TAGS (Default/Fallback):** If a token is *not* part of any specific entity, it should be tagged to reflect the overall intent of the utterance.
+        *   The first token of the sentence (if not an entity) should be `B-<UTTERANCE_INTENT>`.
+        *   Subsequent non-entity tokens should be `I-<UTTERANCE_INTENT>`.
+        *   The `<UTTERANCE_INTENT>` should be chosen from the `INTENT_TYPES` list.
+    *   **IMPORTANT:** Ensure every token has a tag. If no specific entity or clear intent can be assigned, use `O` (Outside) for tokens.
 
+3.  **EXTRACT INTENT:** In addition to tagging, determine and provide the single overall `intent` of the utterance as a separate field. This `intent` should be one of the `INTENT_TYPES`.
 
-**Sentences to Annotate Now:**
+4.  **OUTPUT FORMAT (CRITICAL):** Return a JSON array of objects. Each object in the array must contain:
+    *   `text`: The original lowercase input sentence (for verification purposes).
+    *   `tokens`: A JSON array of the tokenized words.
+    *   `tags`: A JSON array of the BIO tags, corresponding one-to-one with the `tokens` array.
+    *   `intent`: A single string representing the overall utterance intent.
+
+**ENTITY TYPES LIST (USE ONLY THESE FOR ENTITY TAGS):**
+{json.dumps(ENTITY_TYPES, ensure_ascii=False, indent=2)}
+
+**INTENT TYPES LIST (USE ONE FOR UTTERANCE INTENT AND FOR DEFAULT TAGS):**
+{json.dumps(INTENT_TYPES, ensure_ascii=False, indent=2)}
+
+**Example Input String 1 (with entities):**
+"then if he becomes a champion, he's entitled to more money after that and champion end"
+
+**CORRECT Example Output 1 (assuming intent is INFORM and "champion" is a PROJECT_NAME):**
+```json
+[
+  {{
+    "text": "then if he becomes a champion, he's entitled to more money after that and champion end",
+    "tokens": ["then", "if", "he", "becomes", "a", "champion", ",", "he's", "entitled", "to", "more", "money", "after", "that", "and", "champion", "end"],
+    "tags": ["B-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "B-PROJECT_NAME", "O", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "B-PROJECT_NAME", "O"],
+    "intent": "INFORM"
+  }}
+]
+
+Sentences to Annotate Now:
 {json.dumps(texts_to_annotate, ensure_ascii=False, indent=2)}
 '''
-
-    max_retries = 3
-    retry_delay = 5
-    for attempt in range(max_retries):
-        try:
-            model = genai.GenerativeModel("gemini-1.5-flash-latest")
-            response = model.generate_content(prompt)
-            assistant_reply = response.text.strip()
-
-            if assistant_reply.startswith("```json"):
-                assistant_reply = assistant_reply[len("```json"):].strip()
-            elif assistant_reply.startswith("```"):
-                 assistant_reply = assistant_reply[len("```"):].strip()
-            if assistant_reply.endswith("```"):
-                assistant_reply = assistant_reply[:-len("```")].strip()
-
-            if not (assistant_reply.startswith('[') and assistant_reply.endswith(']')):
-                 raise json.JSONDecodeError("Response does not look like a JSON list.", assistant_reply, 0)
-
-            annotated_sentences_raw = json.loads(assistant_reply)
-
-            if isinstance(annotated_sentences_raw, list) and len(annotated_sentences_raw) == len(texts_to_annotate):
-                processed_sentences = []
-                for sentence in annotated_sentences_raw:
-                     if isinstance(sentence, str):
-                          # Apply fix_end_tags_and_spacing which includes correct_entity_tag_spaces
-                          final_sentence = fix_end_tags_and_spacing(sentence)
-                          processed_sentences.append(final_sentence)
-                     else:
-                          print(f"Warning: Non-string item received in annotation list: {sentence}")
-                          # Pass through the original text if annotation failed for this item somehow
-                          original_index = annotated_sentences_raw.index(sentence) # Risky if duplicates
-                          processed_sentences.append(texts_to_annotate[original_index] + " INTENT_ERROR_NON_STRING_RESPONSE")
-                return processed_sentences
-            else:
-                print(f"Error: API did not return a valid list or mismatched length. Expected {len(texts_to_annotate)}, Got {len(annotated_sentences_raw) if isinstance(annotated_sentences_raw, list) else 'Invalid Type'}")
-                if attempt == max_retries - 1: # Last attempt failed
-                    return [text + " INTENT_ERROR_API_RESPONSE_FORMAT" for text in texts_to_annotate] # Tag problematic ones
-                else:
-                    print(f"Retrying annotation (attempt {attempt + 2}/{max_retries})...")
-                    time.sleep(retry_delay * (attempt + 1))
-
-        except json.JSONDecodeError as e:
-            print(f"JSON decoding failed (Attempt {attempt+1}/{max_retries}): {e}")
-            print("Problematic Raw response snippet:", assistant_reply[:500] if 'assistant_reply' in locals() else "N/A")
-            if attempt == max_retries - 1:
-                return [text + " INTENT_ERROR_JSON_DECODE" for text in texts_to_annotate]
-            print(f"Retrying annotation...")
-            time.sleep(retry_delay * (attempt + 1))
-        except Exception as e:
-            print(f"Error calling/processing Generative AI (Attempt {attempt+1}/{max_retries}): {e}")
-            if "rate limit" in str(e).lower():
-                 print("Rate limit likely hit.")
-                 time.sleep(retry_delay * (attempt + 1) * 5) # Longer delay for rate limits
-            else:
-                 time.sleep(retry_delay * (attempt + 1))
-            if attempt == max_retries - 1:
-                return [text + " INTENT_ERROR_API_CALL" for text in texts_to_annotate]
-
-    print("Error: Max retries reached for annotation.")
-    return [text + " INTENT_ERROR_MAX_RETRIES" for text in texts_to_annotate]
-
-
-# --- Main Processing Function (MODIFIED) ---
-def process_audio_and_annotate(dataset_input_dir: str, output_jsonl_path: str, batch_size: int = 10) -> None:
-    output_dir_for_file = os.path.dirname(output_jsonl_path)
-    os.makedirs(output_dir_for_file, exist_ok=True)
+def parse_llm_bio_output(llm_response_json_string: str, original_texts: List[str]) -> List[Dict[str, Any]]:
+    """
+    Parses the LLM's raw JSON output string into a list of structured BIO annotations.
+    Each item in the list will contain 'tokens', 'tags', and 'intent'.
+    Handles markdown blocks and potential malformed JSON.
+    """
+    processed_results = []
+    # Clean markdown code blocks if present
+    cleaned_response = llm_response_json_string.strip()
+    if cleaned_response.startswith("```json"):
+        cleaned_response = cleaned_response[len("```json"):].strip()
+    elif cleaned_response.startswith("```"):
+         cleaned_response = cleaned_response[len("```"):].strip()
+    if cleaned_response.endswith("```"):
+        cleaned_response = cleaned_response[:-len("```")].strip()
 
     try:
-        print(f"Attempting to clear/create output file: {output_jsonl_path}")
-        with open(output_jsonl_path, 'w') as f_clear:
-            f_clear.write("") # Clears the file if it exists, or creates it
-        print(f"Output file {output_jsonl_path} is ready.")
+        data = json.loads(cleaned_response)
+        
+        # Ensure 'data' is a list. Some LLMs might return a single object or wrap in { "sentences": [...] }
+        if isinstance(data, dict) and "sentences" in data and isinstance(data["sentences"], list):
+            data = data["sentences"]
+        elif not isinstance(data, list):
+            # If it's a single object (not a list of objects), wrap it for consistent processing
+            if isinstance(data, dict) and all(k in data for k in ["tokens", "tags", "intent"]):
+                data = [data]
+            else:
+                raise ValueError("LLM response is not a list of objects or a single valid object.")
+
+        if len(data) != len(original_texts):
+            print(f"Warning: Mismatch in LLM response length. Expected {len(original_texts)}, got {len(data)}. Padding/truncating.")
+            # Pad or truncate to match expected length
+            if len(data) < len(original_texts):
+                data.extend([{"tokens": [], "tags": [], "intent": "PARSE_ERROR", "text": orig_text} for orig_text in original_texts[len(data):]])
+            else: # If LLM returned more than expected
+                data = data[:len(original_texts)]
+        
+        for i, item in enumerate(data):
+            tokens = item.get("tokens", [])
+            tags = item.get("tags", [])
+            intent = item.get("intent", "UNKNOWN_INTENT").upper() 
+
+            # Basic validation and normalization
+            if not isinstance(tokens, list) or not all(isinstance(t, str) for t in tokens):
+                print(f"Warning: Invalid tokens in LLM response for index {i} (original text: '{original_texts[i]}'). Tokens: {tokens}")
+                tokens = original_texts[i].lower().split() # Fallback to simple split
+            if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+                print(f"Warning: Invalid tags in LLM response for index {i} (original text: '{original_texts[i]}'). Tags: {tags}")
+                tags = ["O"] * len(tokens) # Default to 'O'
+            
+            # Ensure lengths match, if not, try to recover or default
+            if len(tokens) != len(tags):
+                print(f"Warning: Token-tag length mismatch for index {i} (original text: '{original_texts[i]}'). Tokens: {len(tokens)}, Tags: {len(tags)}. Attempting recovery.")
+                if len(tokens) > 0:
+                    tags = tags[:len(tokens)] + ["O"] * (len(tokens) - len(tags)) # Pad tags if too short
+                else:
+                    tokens = original_texts[i].lower().split() # Re-tokenize if tokens was empty
+                    tags = ["O"] * len(tokens) # Default all to O
+
+            # Normalize tags: uppercase types, handle potential spaces
+            cleaned_tags = []
+            for tag in tags:
+                if tag.upper() == "O":
+                    cleaned_tags.append("O")
+                elif tag.startswith("B-") or tag.startswith("I-"):
+                    parts = tag.split('-', 1)
+                    if len(parts) == 2:
+                        prefix, type_part = parts
+                        cleaned_type_part = type_part.replace(' ', '').upper()
+                        cleaned_tags.append(f"{prefix.upper()}-{cleaned_type_part}")
+                    else: # Malformed B- or I- tag, default to O
+                        cleaned_tags.append("O")
+                else: # Any other unexpected tag, default to O
+                    cleaned_tags.append("O")
+            
+            # Ensure final tokens and tags match length after all normalization
+            if len(tokens) != len(cleaned_tags):
+                print(f"Final warning: Token-tag length mismatch after normalization for index {i} (original text: '{original_texts[i]}'). Forcing consistency.")
+                cleaned_tags = cleaned_tags[:len(tokens)] + ["O"] * (len(tokens) - len(cleaned_tags))
+
+            processed_results.append({
+                "tokens": tokens,
+                "tags": cleaned_tags,
+                "intent": intent
+            })
+    except json.JSONDecodeError as e:
+        print(f"JSON decoding failed for LLM response: {e}. Raw response snippet: {cleaned_response[:500]}...")
+        # Return error entries for all original texts if parsing fails for the whole batch
+        processed_results = [{"tokens": original_texts[i].lower().split(), "tags": ["PARSE_ERROR"] * len(original_texts[i].lower().split()), "intent": "JSON_PARSE_ERROR"} for i in range(len(original_texts))]
+    except Exception as e:
+        print(f"Unexpected error in parse_llm_bio_output: {e}. Raw response snippet: {cleaned_response[:500]}...")
+        processed_results = [{"tokens": original_texts[i].lower().split(), "tags": ["ERROR"] * len(original_texts[i].lower().split()), "intent": "GENERAL_PARSE_ERROR"} for i in range(len(original_texts))]
+
+    return processed_results
+def annotate_batch_texts_ollama(texts_to_annotate: List[str]) -> List[Dict[str, Any]]:
+    """Annotates a batch of texts using Ollama and parses into BIO format."""
+    if not ollama_client:
+        print("Error: Ollama client not configured. Skipping Ollama annotation.")
+        return [{"tokens": text.lower().split(), "tags": ["NOT_CONFIGURED"] * len(text.lower().split()), "intent": "OLLAMA_NOT_CONFIGURED"} for text in texts_to_annotate]
+    if not texts_to_annotate:
+        return []
+    prompt_content = get_annotation_prompt(texts_to_annotate)
+    max_retries = 3
+    retry_delay = 5
+
+    messages = [{'role': 'user', 'content': prompt_content}]
+
+    for attempt in range(max_retries):
+        try:
+            # Ollama's chat endpoint can accept `format='json'` which helps, but doesn't guarantee structure.
+            response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages, format='json') 
+            assistant_reply = response['message']['content'].strip()
+
+            parsed_results = parse_llm_bio_output(assistant_reply, texts_to_annotate)
+
+            if len(parsed_results) == len(texts_to_annotate) and all("tokens" in p and "tags" in p for p in parsed_results):
+                return parsed_results
+            else:
+                print(f"Warning: Ollama parsing returned inconsistent or incomplete results. Attempt {attempt+1}/{max_retries}.")
+                if attempt == max_retries - 1:
+                    return [{"tokens": text.lower().split(), "tags": ["PARSE_FAIL"] * len(text.lower().split()), "intent": "OLLAMA_PARSE_FAIL"} for text in texts_to_annotate]
+                time.sleep(retry_delay * (attempt + 1))
+
+        except Exception as e:
+            print(f"Error calling/processing Ollama AI (Attempt {attempt+1}/{max_retries}): {e}")
+            if "connection refused" in str(e).lower() or "timeout" in str(e).lower():
+                print("Ollama server might not be running or accessible.")
+            time.sleep(retry_delay * (attempt + 1))
+            if attempt == max_retries - 1:
+                return [{"tokens": text.lower().split(), "tags": ["API_ERROR"] * len(text.lower().split()), "intent": "OLLAMA_API_ERROR"} for text in texts_to_annotate]
+
+    print("Error: Max retries reached for Ollama annotation.")
+    return [{"tokens": text.lower().split(), "tags": ["MAX_RETRIES"] * len(text.lower().split()), "intent": "OLLAMA_MAX_RETRIES"} for text in texts_to_annotate]
+
+def annotate_batch_texts_gemini(texts_to_annotate: List[str]) -> List[Dict[str, Any]]:
+    """Annotates a batch of texts using Google Gemini and parses into BIO format."""
+    if not genai:
+        print("Error: Google Generative AI not configured. Skipping Gemini annotation.")
+        return [{"tokens": text.lower().split(), "tags": ["NOT_CONFIGURED"] * len(text.lower().split()), "intent": "GEMINI_NOT_CONFIGURED"} for text in texts_to_annotate]
+    if not texts_to_annotate:
+        return []
+    
+    prompt_content = get_annotation_prompt(texts_to_annotate)
+    max_retries = 3
+    retry_delay = 5
+
+    for attempt in range(max_retries):
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(prompt_content)
+            assistant_reply = response.text.strip()
+
+            parsed_results = parse_llm_bio_output(assistant_reply, texts_to_annotate)
+
+            if len(parsed_results) == len(texts_to_annotate) and all("tokens" in p and "tags" in p for p in parsed_results):
+                return parsed_results
+            else:
+                print(f"Warning: Gemini parsing returned inconsistent or incomplete results. Attempt {attempt+1}/{max_retries}.")
+                if attempt == max_retries - 1:
+                    return [{"tokens": text.lower().split(), "tags": ["PARSE_FAIL"] * len(text.lower().split()), "intent": "GEMINI_PARSE_FAIL"} for text in texts_to_annotate]
+                time.sleep(retry_delay * (attempt + 1))
+
+        except Exception as e:
+            print(f"Error calling/processing Gemini AI (Attempt {attempt+1}/{max_retries}): {e}")
+            if "quota" in str(e).lower() or "rate limit" in str(e).lower():
+                print("Gemini API quota/rate limit reached.")
+            time.sleep(retry_delay * (attempt + 1))
+            if attempt == max_retries - 1:
+                return [{"tokens": text.lower().split(), "tags": ["API_ERROR"] * len(text.lower().split()), "intent": "GEMINI_API_ERROR"} for text in texts_to_annotate]
+
+    print("Error: Max retries reached for Gemini annotation.")
+    return [{"tokens": text.lower().split(), "tags": ["MAX_RETRIES"] * len(text.lower().split()), "intent": "GEMINI_MAX_RETRIES"} for text in texts_to_annotate]
+def format_gender(gender_str: str) -> str:
+    """Formats raw gender string to desired casing."""
+    if gender_str.upper() == "FEMALE": return "Female"
+    if gender_str.upper() == "MALE": return "Male"
+    if gender_str.upper() == "OTHER": return "Other"
+    return "Unknown" # For "UNKNOWN" or "ERROR"
+
+def format_emotion(emotion_str: str) -> str:
+    """Maps raw emotion labels to desired abbreviations."""
+    emotion_map = {
+        "ANGER": "Ang",
+        "NEUTRAL": "Neu",
+        "SADNESS": "Sad",
+        "HAPPINESS": "Hap",
+        "FEAR": "Fea",
+        "DISGUST": "Dis",
+        "SURPRISE": "Sur",
+        "ERRORLOADINGMODEL": "Err",
+        "NO_AUDIO": "NA",
+        "EXTRACTION_ERROR": "Err",
+        "UNKNOWN": "Unk" # For "Unknown" from model
+    }
+    return emotion_map.get(emotion_str.upper(), "Unk")
+
+# --- Main Processing Function (MODIFIED) ---
+def process_audio_and_annotate(
+    dataset_input_dir: str,
+    output_json_path: str, # Renamed for clarity
+    batch_size: int = 10,
+    annotation_model_choice: str = "gemini" # 'gemini', 'ollama', 'both', 'none'
+) -> None:
+    output_dir_for_file = os.path.dirname(output_json_path)
+    os.makedirs(output_dir_for_file, exist_ok=True)
+    try:
+        print(f"Attempting to clear/create output file: {output_json_path}")
+        with open(output_json_path, 'w') as f_clear:
+            f_clear.write("[]") # Initialize with an empty JSON array for safety, or just clear
+        print(f"Output file {output_json_path} is ready.")
     except IOError as e:
-        print(f"Error preparing output file {output_jsonl_path}: {e}. Please check permissions.")
+        print(f"Error preparing output file {output_json_path}: {e}. Please check permissions.")
         return
 
-    print("Loading models...")
+    print("Loading audio analysis models...")
     age_gender_model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
     try:
         processor = Wav2Vec2Processor.from_pretrained(age_gender_model_name)
@@ -418,10 +538,10 @@ def process_audio_and_annotate(dataset_input_dir: str, output_jsonl_path: str, b
 
     print("-" * 30)
     print(f"Processing NPTEL-style dataset from: {dataset_input_dir}")
-    print(f"Output will be saved to: {output_jsonl_path}")
+    print(f"Output will be saved to: {output_json_path}")
+    print(f"Annotation model choice: {annotation_model_choice.upper()}")
     print("-" * 30)
 
-    # Use the new function to get audio paths and transcriptions
     file_data_pairs = get_nptel_file_data(dataset_input_dir)
     if not file_data_pairs:
         print("No matching audio files and transcriptions found. Exiting.")
@@ -430,6 +550,7 @@ def process_audio_and_annotate(dataset_input_dir: str, output_jsonl_path: str, b
     total_files = len(file_data_pairs)
     print(f"Found {total_files} audio files with transcriptions to process.")
 
+    all_processed_records = [] # Initialize list to store all records
     processed_records_buffer = []
     batch_num = 0
     files_processed_count = 0
@@ -438,8 +559,7 @@ def process_audio_and_annotate(dataset_input_dir: str, output_jsonl_path: str, b
     for i, (audio_path, original_transcription_text) in enumerate(file_data_pairs):
         print(f"\nProcessing file {i+1}/{total_files}: {os.path.basename(audio_path)}")
         try:
-            # Convert transcription to lowercase immediately
-            transcription = original_transcription_text.lower()
+            transcription = original_transcription_text.lower() # Raw lowercase for LLM input
             if not transcription:
                 print(f"  Skipping: Empty transcription for {audio_path}")
                 continue
@@ -450,7 +570,7 @@ def process_audio_and_annotate(dataset_input_dir: str, output_jsonl_path: str, b
                     print(f"  Skipping: Failed to load or empty audio in {audio_path}")
                     continue
                 duration = round(len(signal) / sr, 2)
-                if duration < 0.1: # Minimum duration check
+                if duration < 0.1:
                      print(f"  Skipping: Audio too short ({duration:.2f}s) in {audio_path}")
                      continue
             except Exception as load_err:
@@ -462,39 +582,24 @@ def process_audio_and_annotate(dataset_input_dir: str, output_jsonl_path: str, b
                 input_values = inputs.input_values.to(device)
                 with torch.no_grad():
                     _, logits_age, logits_gender = age_gender_model(input_values)
-                age = logits_age.cpu().numpy().item()
+                age_raw = logits_age.cpu().numpy().item()
                 gender_idx = torch.argmax(logits_gender, dim=-1).cpu().numpy().item()
                 gender_map = {0: "FEMALE", 1: "MALE", 2: "OTHER"}
-                gender = gender_map.get(gender_idx, "UNKNOWN")
+                gender_raw = gender_map.get(gender_idx, "UNKNOWN")
             except Exception as age_gender_err:
                 print(f"  Error during Age/Gender extraction: {age_gender_err}")
-                age = -1.0 # Indicate error
-                gender = "ERROR"
+                age_raw = -1.0
+                gender_raw = "ERROR"
 
-            emotion = extract_emotion(signal, sr, emotion_model_info)
-
-            speaker_base = os.path.splitext(os.path.basename(audio_path))[0]
-            speaker_parts = speaker_base.split('_') # e.g., "104_eng_1021_132882"
-            speaker = speaker_parts[0] if speaker_parts else speaker_base # "104"
-
-            segment_data = AudioSegment(
-                start_time=0, end_time=duration, speaker=speaker, age=age,
-                gender=gender, transcription=transcription, # transcription is now lowercase
-                emotion=emotion, chunk_filename=os.path.basename(audio_path),
-                duration=duration
-            )
-            chunk = ChunkData(segments=[segment_data], filepath=os.path.abspath(audio_path))
-            initial_formatted_text = chunk.get_formatted_text()
+            emotion_raw = extract_emotion(signal, sr, emotion_model_info)
 
             record = {
-                "audio_filepath": chunk.filepath,
+                "audio_filepath": os.path.abspath(audio_path),
                 "duration": duration,
-                "initial_text": initial_formatted_text, # This text includes AGE/GENDER/EMOTION
-                # For debugging or other uses, you might want to store raw model outputs:
-                # "raw_age_output": age,
-                # "raw_gender_prediction": gender,
-                # "raw_emotion_prediction": emotion,
-                # "speaker_id": speaker,
+                "original_transcription": transcription, 
+                "predicted_gender_raw": gender_raw,
+                "predicted_age_raw": age_raw,
+                "predicted_emotion_raw": emotion_raw,
             }
             processed_records_buffer.append(record)
             files_processed_count += 1
@@ -504,33 +609,64 @@ def process_audio_and_annotate(dataset_input_dir: str, output_jsonl_path: str, b
                 current_batch_size = len(processed_records_buffer)
                 print(f"\n--- Annotating Batch {batch_num} ({current_batch_size} records) ---")
 
-                texts_to_annotate = [rec["initial_text"] for rec in processed_records_buffer]
-                annotated_texts = annotate_batch_texts(texts_to_annotate)
+                texts_for_llm_annotation = [rec["original_transcription"] for rec in processed_records_buffer]
+                
+                default_bio_data = {"tokens": [], "tags": [], "intent": "NOT_ANNOTATED"}
+                gemini_annotated_data = [dict(default_bio_data, tokens=text.lower().split()) for text in texts_for_llm_annotation]
+                ollama_annotated_data = [dict(default_bio_data, tokens=text.lower().split()) for text in texts_for_llm_annotation]
 
-                if len(annotated_texts) != current_batch_size:
-                    print(f"  FATAL BATCH ERROR: Annotation count mismatch! Expected {current_batch_size}, Got {len(annotated_texts)}. Skipping save for this batch.")
-                    # Potentially write the failed 'initial_text' to an error log or save with error tags
-                else:
-                    try:
-                        lines_written_in_batch = 0
-                        with open(output_jsonl_path, 'a', encoding='utf-8') as f_out:
-                            for record_data, annotated_text in zip(processed_records_buffer, annotated_texts):
-                                final_record = {
-                                    "audio_filepath": record_data["audio_filepath"],
-                                    "duration": record_data["duration"],
-                                    "text": annotated_text, # This is the fully annotated text from Gemini
-                                }
-                                json_str = json.dumps(final_record, ensure_ascii=False)
-                                f_out.write(json_str + '\n')
-                                lines_written_in_batch += 1
-                        total_records_saved += lines_written_in_batch
-                        print(f"--- Batch {batch_num} annotated and saved ({lines_written_in_batch} records). Total saved: {total_records_saved} ---")
-                    except IOError as io_err:
-                         print(f"  Error writing batch {batch_num} to {output_jsonl_path}: {io_err}")
-                    except Exception as write_err:
-                         print(f"  Unexpected error writing batch {batch_num}: {write_err}")
+                if annotation_model_choice in ["gemini", "both"]:
+                    print("  Calling Gemini for annotation...")
+                    gemini_annotated_data = annotate_batch_texts_gemini(texts_for_llm_annotation)
+                
+                if annotation_model_choice in ["ollama", "both"]:
+                    print("  Calling Ollama for annotation...")
+                    ollama_annotated_data = annotate_batch_texts_ollama(texts_for_llm_annotation)
 
-                processed_records_buffer = [] # Clear buffer for next batch
+                if len(gemini_annotated_data) != current_batch_size or len(ollama_annotated_data) != current_batch_size:
+                    print(f"  CRITICAL ERROR: Final annotation data count mismatch after LLM calls! Skipping save for this batch.")
+                    processed_records_buffer = [] # Clear buffer even on error to avoid reprocessing
+                    continue
+
+                for j, record_data in enumerate(processed_records_buffer):
+                    current_gemini_data = gemini_annotated_data[j]
+                    current_ollama_data = ollama_annotated_data[j]
+
+                    final_record = {
+                        "audio_filepath": record_data["audio_filepath"],
+                        "text": record_data["original_transcription"],
+                        "original_transcription": record_data["original_transcription"],
+                        "duration": record_data["duration"],
+                        "task_name": "OTHER",
+                        "gender": format_gender(record_data["predicted_gender_raw"]),
+                        "age_group": ChunkData.get_age_bucket(record_data["predicted_age_raw"]),
+                        "emotion": format_emotion(record_data["predicted_emotion_raw"]),
+                    }
+
+                    if annotation_model_choice in ["gemini", "both"]:
+                        final_record["gemini_intent"] = current_gemini_data["intent"]
+                        final_record["bio_annotation_gemini"] = {
+                            "tokens": current_gemini_data["tokens"],
+                            "tags": current_gemini_data["tags"]
+                        }
+                    else:
+                        final_record["gemini_intent"] = "NOT_USED"
+                        final_record["bio_annotation_gemini"] = {"tokens": [], "tags": []}
+
+                    if annotation_model_choice in ["ollama", "both"]:
+                        final_record["ollama_intent"] = current_ollama_data["intent"]
+                        final_record["bio_annotation_ollama"] = {
+                            "tokens": current_ollama_data["tokens"],
+                            "tags": current_ollama_data["tags"]
+                        }
+                    else:
+                        final_record["ollama_intent"] = "NOT_USED"
+                        final_record["bio_annotation_ollama"] = {"tokens": [], "tags": []}
+                    
+                    all_processed_records.append(final_record) # Append to the main list
+                
+                print(f"--- Batch {batch_num} processed and added to memory ({len(processed_records_buffer)} records). Total in memory: {len(all_processed_records)} ---")
+                processed_records_buffer = [] 
                 torch.cuda.empty_cache()
                 gc.collect()
 
@@ -539,56 +675,70 @@ def process_audio_and_annotate(dataset_input_dir: str, output_jsonl_path: str, b
             break
         except Exception as e:
             print(f"  FATAL ERROR processing file {audio_path}: {e}")
-            import traceback
             traceback.print_exc()
-            continue # Skip to the next file
+            continue
+
+    # After the loop, write all accumulated records to the JSON file
+    try:
+        print(f"\nWriting all {len(all_processed_records)} processed records to {output_json_path}...")
+        with open(output_json_path, 'w', encoding='utf-8') as f_out:
+            json.dump(all_processed_records, f_out, ensure_ascii=False, indent=4)
+        total_records_saved = len(all_processed_records)
+        print(f"Successfully wrote {total_records_saved} records to {output_json_path}.")
+    except IOError as io_err:
+        print(f"  Error writing final JSON to {output_json_path}: {io_err}")
+    except Exception as write_err:
+        print(f"  Unexpected error writing final JSON: {write_err}")
 
     print("\n" + "="*30)
     print(f"Processing Finished.")
     print(f"Total files processed attempt: {files_processed_count}/{total_files}")
-    print(f"Total records saved to {output_jsonl_path}: {total_records_saved}")
+    print(f"Total records saved to {output_json_path}: {total_records_saved}")
     print("="*30)
-
-
-# --- Main Execution ---
 if __name__ == "__main__":
-    # Configure this path to point to the specific NPTEL dataset directory
-    # (e.g., the 'english_190' directory provided in the example)
     INPUT_DATASET_DIR = "/external3/databases/NPTEL2020-Indian-English-Speech-Dataset/english_190"
+    output_filename = f"{os.path.basename(INPUT_DATASET_DIR)}_structured_bio_annotated.json" # Changed extension to .json
+    output_dir_for_jsonl = INPUT_DATASET_DIR 
 
-    # Define where the final annotated JSONL file will be saved.
-    # This example saves it in the parent directory of INPUT_DATASET_DIR,
-    # naming it after the dataset folder.
-    output_filename = f"{os.path.basename(INPUT_DATASET_DIR)}_annotated_v2_lowercase.jsonl"
-    # Ensure the output directory exists, or choose a different one.
-    # Example: Save in the same directory as the script or a dedicated output folder.
-    # output_dir_for_jsonl = os.path.dirname(INPUT_DATASET_DIR) # Parent directory
-    output_dir_for_jsonl = INPUT_DATASET_DIR # Inside the dataset directory itself
-    # Or a fixed path:
-    # output_dir_for_jsonl = "/path/to/your/outputs"
+    FINAL_OUTPUT_JSON = os.path.join(output_dir_for_jsonl, output_filename) # Renamed variable for clarity
 
-    FINAL_OUTPUT_JSONL = os.path.join(output_dir_for_jsonl, output_filename)
-    
-    PROCESSING_BATCH_SIZE = 10 # Adjust based on API limits and memory
+    PROCESSING_BATCH_SIZE = 5 
+
+    # --- CHOOSE YOUR ANNOTATION MODEL(S) HERE ---
+    # Options: 'gemini', 'ollama', 'both', 'none'
+    # SELECTED_ANNOTATION_MODEL = "gemini" 
+    # SELECTED_ANNOTATION_MODEL = "ollama"
+    SELECTED_ANNOTATION_MODEL = "both" # Recommended for testing both outputs
+    # SELECTED_ANNOTATION_MODEL = "none" # Use only transcription without LLM annotation
 
     print(f"Starting NPTEL Audio Processing and Annotation Workflow...")
     print(f"Input Dataset Directory: {INPUT_DATASET_DIR}")
-    print(f"Final Output File: {FINAL_OUTPUT_JSONL}")
+    print(f"Final Output File: {FINAL_OUTPUT_JSON}") # Updated variable name
     print(f"Processing Batch Size: {PROCESSING_BATCH_SIZE}")
+    print(f"Selected Annotation Model(s): {SELECTED_ANNOTATION_MODEL.upper()}")
     print("-" * 30)
 
     if not os.path.isdir(INPUT_DATASET_DIR):
         print(f"ERROR: Input dataset directory not found: {INPUT_DATASET_DIR}")
         exit(1)
 
-    if not genai:
-         print("ERROR: Google Generative AI failed to configure. Annotation will be skipped. Exiting.")
+    # Pre-check for chosen models
+    if SELECTED_ANNOTATION_MODEL in ["gemini", "both"] and not genai:
+         print("ERROR: Gemini selected but not configured. Please check GOOGLE_API_KEY. Exiting.")
          exit(1)
+    if SELECTED_ANNOTATION_MODEL in ["ollama", "both"] and not ollama_client:
+         print(f"ERROR: Ollama selected but not configured/connected. Please ensure Ollama server is running and model '{OLLAMA_MODEL}' is pulled. Exiting.")
+         exit(1)
+    if SELECTED_ANNOTATION_MODEL not in ['gemini', 'ollama', 'both', 'none']:
+        print(f"ERROR: Invalid annotation model choice '{SELECTED_ANNOTATION_MODEL}'. Please choose from 'gemini', 'ollama', 'both', 'none'.")
+        exit(1)
+
 
     process_audio_and_annotate(
         dataset_input_dir=INPUT_DATASET_DIR,
-        output_jsonl_path=FINAL_OUTPUT_JSONL,
-        batch_size=PROCESSING_BATCH_SIZE
+        output_json_path=FINAL_OUTPUT_JSON, # Updated variable name
+        batch_size=PROCESSING_BATCH_SIZE,
+        annotation_model_choice=SELECTED_ANNOTATION_MODEL
     )
 
     print("Workflow complete.")

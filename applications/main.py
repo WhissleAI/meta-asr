@@ -16,6 +16,7 @@ import resampy
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
+from deepgram import DeepgramClient, PrerecordedOptions 
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Any, Optional, Union
@@ -61,6 +62,7 @@ logger = logging.getLogger(__name__)
 # --- Constants and Globals ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 WHISSLE_AUTH_TOKEN = os.getenv("WHISSLE_AUTH_TOKEN")
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")  # New env variable
 GEMINI_CONFIGURED = False
 WHISSLE_CONFIGURED = False
 AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg', '.m4a']
@@ -178,6 +180,20 @@ elif WHISSLE_AVAILABLE:
 class ModelChoice(str, Enum):
     gemini = "gemini"
     whissle = "whissle"
+    deepgram = "deepgram"
+
+
+# Check Deepgram configuration
+DEEPGRAM_CONFIGURED = bool(DEEPGRAM_API_KEY)
+if DEEPGRAM_CONFIGURED:
+    try:
+        DEEPGRAM_CLIENT = DeepgramClient(DEEPGRAM_API_KEY)
+        logger.info("Deepgram client initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Deepgram client: {e}")
+        DEEPGRAM_CONFIGURED = False
+else:
+    logger.warning("Deepgram API key not set. Deepgram transcription disabled.")
 
 class ProcessRequest(BaseModel):
     directory_path: str = PydanticField(..., description="Absolute path to the directory containing audio files.", example="/path/to/audio")
@@ -602,11 +618,40 @@ def discover_audio_files(dir_path: Path) -> List[Path]:
         return audio_files
     except Exception as e: raise HTTPException(status_code=500, detail=f"Error scanning directory: {e}")
 
+# New Deepgram transcription function
+async def transcribe_with_deepgram_single(audio_path: Path) -> tuple[Optional[str], Optional[str]]:
+    if not DEEPGRAM_CONFIGURED:
+        return None, "Deepgram not configured."
+    try:
+        with open(audio_path, "rb") as audio_file:
+            buffer_data = audio_file.read()
+        options = PrerecordedOptions(
+            model="nova-2",  # Fastest model[](https://developers.deepgram.com/docs/pre-recorded-audio)
+            smart_format=True,  # Adds punctuation and formatting[](https://developers.deepgram.com/docs/pre-recorded-audio)
+            diarize=False,  # Optional: enable if speaker detection is needed[](https://deepgram.com/the-top-rated-speech-to-text-api)
+            language="en"  # Adjust if needed[](https://deepgram.com/the-top-rated-speech-to-text-api)
+        )
+       # Run synchronous Deepgram call in a thread to avoid blocking
+        response = await asyncio.to_thread(
+            DEEPGRAM_CLIENT.listen.prerecorded.v("1").transcribe_file,
+            {"buffer": buffer_data, "mimetype": get_mime_type(audio_path)},
+            options
+        )
+        transcript = response["results"]["channels"][0]["alternatives"][0]["transcript"]
+        if not transcript:
+            return None, "Deepgram returned empty transcript."
+        return transcript, None
+    except Exception as e:
+        logger.error(f"Deepgram transcription error for {audio_path.name}: {e}")
+        return None, f"Deepgram error: {str(e)}"
+
 @app.post("/create_transcription_manifest/", response_model=ProcessResponse, summary="Create Transcription-Only Manifest")
 async def create_transcription_manifest_endpoint(process_request: ProcessRequest):
     model_choice = process_request.model_choice
     if model_choice == ModelChoice.whissle and not WHISSLE_CONFIGURED: raise HTTPException(status_code=400, detail="Whissle not configured.")
     if model_choice == ModelChoice.gemini and not GEMINI_CONFIGURED: raise HTTPException(status_code=400, detail="Gemini not configured.")
+    if model_choice == ModelChoice.deepgram and not DEEPGRAM_CONFIGURED:
+        raise HTTPException(status_code=400, detail="Deepgram not configured.")
 
     dir_path, output_jsonl_path = validate_paths(process_request.directory_path, process_request.output_jsonl_path)
     audio_files = discover_audio_files(dir_path)
@@ -626,12 +671,20 @@ async def create_transcription_manifest_endpoint(process_request: ProcessRequest
                 processed_files_count += 1
                 try:
                     duration = get_audio_duration(audio_file)
-                    if model_choice == ModelChoice.whissle: transcription_text, transcription_error = await transcribe_with_whissle_single(audio_file)
-                    else: transcription_text, transcription_error = await transcribe_with_gemini_single(audio_file)
-                    if transcription_error: file_error = f"Transcription failed: {transcription_error}"
-                    elif transcription_text is None: file_error = "Transcription returned None."
-                    else: transcription_text = transcription_text.strip()
-                except Exception as e: file_error = f"Unexpected error: {type(e).__name__}: {e}"
+                    if model_choice == ModelChoice.whissle:
+                        transcription_text, transcription_error = await transcribe_with_whissle_single(audio_file)
+                    elif model_choice == ModelChoice.gemini:
+                        transcription_text, transcription_error = await transcribe_with_gemini_single(audio_file)
+                    else:  # Deepgram
+                        transcription_text, transcription_error = await transcribe_with_deepgram_single(audio_file)
+                    if transcription_error:
+                        file_error = f"Transcription failed: {transcription_error}"
+                    elif transcription_text is None:
+                        file_error = "Transcription returned None."
+                    else:
+                        transcription_text = transcription_text.strip()
+                except Exception as e:
+                    file_error = f"Unexpected error: {type(e).__name__}: {e}"
 
                 record = TranscriptionJsonlRecord(audio_filepath=str(audio_file.resolve()), text=transcription_text, duration=duration, model_used_for_transcription=model_choice.value, error=file_error)
                 try: outfile.write(record.model_dump_json(exclude_none=True) + "\n")

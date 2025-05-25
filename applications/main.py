@@ -236,7 +236,7 @@ class TranscriptionJsonlRecord(BaseModel): # For transcription-only endpoint
     model_used_for_transcription: str
     error: Optional[str] = None
 
-class CustomAnnotatedJsonlRecord(BaseModel): # New model for the desired output format
+class CustomAnnotatedJsonlRecord(BaseModel): 
     audio_filepath: str
     text: Optional[str] = Field(None, description="Transcription with ENTITY tags only")
     duration: Optional[float] = None

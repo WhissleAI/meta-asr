@@ -1,0 +1,15 @@
+{
+    "WER": 0.24666365075774713,
+    "metrics": {
+        "overall_micro": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "fscore": 0.0
+        },
+        "overall_macro": {
+            "precision": NaN,
+            "recall": NaN,
+            "fscore": NaN
+        }
+    }
+}

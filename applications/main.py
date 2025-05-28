@@ -518,7 +518,7 @@ async def annotate_text_structured_with_gemini(text_to_annotate: str) -> Tuple[O
                 parsed_data_list = json.loads(raw_json_output)
                 if not isinstance(parsed_data_list, list) or not parsed_data_list:
                     logger.error(f"Gemini BIO annotation did not return a list or returned an empty list: {raw_json_output}")
-                                    return None, None, None, "Gemini BIO: Invalid or empty list format"
+                    return None, None, None, "Gemini BIO: Invalid or empty list format"
 
                 annotation_object = parsed_data_list[0] # Expecting one object for one input sentence
 
@@ -578,7 +578,7 @@ async def transcribe_with_deepgram_single(audio_path: Path) -> tuple[Optional[st
         return transcript, None
     except Exception as e:
         logger.error(f"Deepgram transcription error for {audio_path.name}: {e}")
-                return None, f"Deepgram error: {str(e)}"
+        return None, f"Deepgram error: {str(e)}"
 
 
 @app.post("/create_transcription_manifest/", response_model=ProcessResponse, summary="Create Transcription-Only Manifest")
@@ -598,7 +598,7 @@ async def create_transcription_manifest_endpoint(process_request: ProcessRequest
             with open(output_jsonl_path, "w", encoding="utf-8") as _: pass
         except IOError as e: 
             raise HTTPException(status_code=500, detail=f"Failed to create empty output file: {e}")
-                return ProcessResponse(message=f"No audio files. Empty manifest created.", output_file=str(output_jsonl_path), processed_files=0, saved_records=0, errors=0)
+        return ProcessResponse(message=f"No audio files. Empty manifest created.", output_file=str(output_jsonl_path), processed_files=0, saved_records=0, errors=0)
 
     processed_files_count = 0; saved_records_count = 0; error_count = 0
     try:
@@ -681,7 +681,7 @@ async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
 
     try:
         with open(output_jsonl_path, "w", encoding="utf-8") as outfile:
-        for audio_file in audio_files:
+         for audio_file in audio_files:
             file_error_details: List[str] = []
             
             # Initialize data for the record

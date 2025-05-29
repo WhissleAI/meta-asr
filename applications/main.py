@@ -16,6 +16,7 @@ import resampy
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
+from deepgram import DeepgramClient, PrerecordedOptions 
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Any, Optional, Union
@@ -26,10 +27,12 @@ from fastapi import (
     File, UploadFile, Form, Query
 )
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, HttpUrl
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field as PydanticField
 import uvicorn
 
 from dotenv import load_dotenv
+
 
 import torch.nn as nn
 from transformers import (
@@ -50,21 +53,7 @@ except ImportError:
     WHISSLE_AVAILABLE = False
     class WhissleClient: pass # Dummy class
 
-try:
-    from ollama import chat
-    OLLAMA_SDK_AVAILABLE = True
-except ImportError:
-    print("Warning: Ollama SDK not found or failed to import. Ollama model will be unavailable.")
-    OLLAMA_SDK_AVAILABLE = False
-    # Define a dummy chat function for when Ollama is not available
-    def chat(model, messages, stream=False): 
-        raise Exception("Ollama SDK not available")
-    class ollama:
-        class APIError(Exception): pass
-        class ResponseError(APIError): pass
-
-
-load_dotenv()
+load_dotenv('/home/dchauhan/workspace/meta-asr/applications/.env')
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(module)s - %(funcName)s - %(message)s')
@@ -73,18 +62,38 @@ logger = logging.getLogger(__name__)
 # --- Constants and Globals ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 WHISSLE_AUTH_TOKEN = os.getenv("WHISSLE_AUTH_TOKEN")
-OLLAMA_API_BASE_URL_ENV = os.getenv("OLLAMA_API_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL_NAME_ENV = os.getenv("OLLAMA_MODEL_NAME")
-
-
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 GEMINI_CONFIGURED = False
 WHISSLE_CONFIGURED = False
-OLLAMA_CONFIGURED = False
-OLLAMA_MODEL_TO_USE: Optional[str] = None
-
-
 AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg', '.m4a']
 TARGET_SAMPLE_RATE = 16000
+
+# --- BIO Annotation Constants ---
+# Moved ENTITY_TYPES and INTENT_TYPES to be global constants as they are used across functions
+ENTITY_TYPES = [
+    "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",
+    "DATE", "TIME", "DURATION", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "DEADLINE", "DELIVERY_DATE", "DELIVERY_TIME",
+    "EVENT", "MEETING", "TASK", "PROJECT_NAME", "ACTION_ITEM", "PRIORITY", "FEEDBACK", "REVIEW", "RATING", "COMPLAINT",
+    "QUESTION", "RESPONSE", "NOTIFICATION_TYPE", "AGENDA", "REMINDER", "NOTE", "RECORD", "ANNOUNCEMENT", "UPDATE",
+    "SCHEDULE", "BOOKING_REFERENCE", "APPOINTMENT_NUMBER", "ORDER_NUMBER", "INVOICE_NUMBER", "PAYMENT_METHOD",
+    "PAYMENT_AMOUNT", "BANK_NAME", "ACCOUNT_NUMBER", "CREDIT_CARD_NUMBER", "TAX_ID", "SOCIAL_SECURITY_NUMBER",
+    "DRIVER'S_LICENSE", "PASSPORT_NUMBER", "INSURANCE_PROVIDER", "POLICY_NUMBER", "INSURANCE_PLAN", "CLAIM_NUMBER",
+    "POLICY_HOLDER", "BENEFICIARY", "RELATIONSHIP", "EMERGENCY_CONTACT", "PROJECT_PHASE", "VERSION", "DEVELOPMENT_STAGE",
+    "DEVICE_NAME", "OPERATING_SYSTEM", "SOFTWARE_VERSION", "BRAND", "MODEL_NUMBER", "LICENSE_PLATE", "VEHICLE_MAKE",
+    "VEHICLE_MODEL", "VEHICLE_TYPE", "FLIGHT_NUMBER", "HOTEL_NAME", "ROOM_NUMBER", "TRANSACTION_ID", "TICKET_NUMBER",
+    "SEAT_NUMBER", "GATE", "TERMINAL", "TRANSACTION_TYPE", "PAYMENT_STATUS", "PAYMENT_REFERENCE", "INVOICE_STATUS",
+    "SYMPTOM", "DIAGNOSIS", "MEDICATION", "DOSAGE", "ALLERGY", "PRESCRIPTION", "TEST_NAME", "TEST_RESULT", "MEDICAL_RECORD",
+    "HEALTH_STATUS", "HEALTH_METRIC", "VITAL_SIGN", "DOCTOR_NAME", "HOSPITAL_NAME", "DEPARTMENT", "WARD", "CLINIC_NAME",
+    "WEBSITE", "URL", "IP_ADDRESS", "MAC_ADDRESS", "USERNAME", "PASSWORD", "LANGUAGE", "CODE_SNIPPET", "DATABASE_NAME",
+    "API_KEY", "WEB_TOKEN", "URL_PARAMETER", "SERVER_NAME", "ENDPOINT", "DOMAIN"
+]
+
+INTENT_TYPES = [
+    "INFORM", "QUESTION", "REQUEST", "COMMAND", "GREETING", "CONFIRMATION", "NEGATION",
+    "ACKNOWLEDGEMENT", "INQUIRY", "FAREWELL", "APOLOGY", "THANKS", "COMPLAINT",
+    "FEEDBACK", "SUGGESTION", "ASSISTANCE", "NAVIGATION", "TRANSACTION", "SCHEDULING",
+    "UNKNOWN_INTENT" # Added for robust handling
+]
 
 # --- Device Setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -93,12 +102,21 @@ logger.info(f"Using device: {device}")
 # --- Initialize FastAPI ---
 app = FastAPI(
     title="Audio Processing API",
-    description="Transcribes audio, optionally predicts Age/Gender/Emotion, annotates Intent/Entities "
-                "(using Gemini or Ollama), and saves results to a JSONL manifest file with custom format.",
-    version="1.6.0" # Incremented version for new output format
+    description="Transcribes audio, optionally predicts Age/Gender/Emotion, annotates Intent/Entities, "
+                "and saves results to a JSONL manifest file.",
+    version="1.5.0" # Incremented version for new output format
 )
 
-# --- Model Loading (Age/Gender, Emotion) ---
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Allow Next.js frontend origin
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
+
+# --- Model Loading ---
 age_gender_model = None
 age_gender_processor = None
 emotion_model = None
@@ -106,6 +124,7 @@ emotion_feature_extractor = None
 
 current_file_path = Path(__file__).parent
 static_dir = current_file_path / "static"
+
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/", include_in_schema=False)
@@ -138,13 +157,13 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         self.config = config
         self.wav2vec2 = Wav2Vec2Model(config)
         self.age = ModelHead(config, 1)
-        self.gender = ModelHead(config, 3)
+        self.gender = ModelHead(config, 3) # Assuming 3 genders (Male, Female, Other/Unknown)
         self.init_weights()
 
     def forward(self, input_values):
         outputs = self.wav2vec2(input_values)
         hidden_states = outputs[0]
-        hidden_states = torch.mean(hidden_states, dim=1)
+        hidden_states = torch.mean(hidden_states, dim=1) # Pool over sequence length
         logits_age = self.age(hidden_states)
         logits_gender = self.gender(hidden_states)
         return hidden_states, logits_age, logits_gender
@@ -169,7 +188,6 @@ try:
 except Exception as e:
     logger.error(f"Failed to load Emotion model: {e}", exc_info=True)
 
-# --- API Configurations (Gemini, Whissle, Ollama) ---
 if GOOGLE_API_KEY:
     try:
         genai.configure(api_key=GOOGLE_API_KEY)
@@ -186,41 +204,62 @@ if WHISSLE_AVAILABLE and WHISSLE_AUTH_TOKEN:
 elif WHISSLE_AVAILABLE:
     logger.warning("Warning: WHISSLE_AUTH_TOKEN environment variable not set. Whissle model will be unavailable.")
 
-if OLLAMA_SDK_AVAILABLE:
-    if OLLAMA_MODEL_NAME_ENV:
-        OLLAMA_MODEL_TO_USE = OLLAMA_MODEL_NAME_ENV
-        try:
-            # Simple test to verify the model exists
-            test_response = chat(
-                model=OLLAMA_MODEL_TO_USE,
-                messages=[{'role': 'user', 'content': 'test'}]
-            )
-            logger.info(f"Ollama configured and verified with model '{OLLAMA_MODEL_TO_USE}' at '{OLLAMA_API_BASE_URL_ENV}'.")
-            OLLAMA_CONFIGURED = True
-        except Exception as e: 
-            logger.error(f"Failed to verify Ollama with model '{OLLAMA_MODEL_TO_USE}' at '{OLLAMA_API_BASE_URL_ENV}': {e}")
-            OLLAMA_CONFIGURED = False
-    else:
-        logger.warning("Warning: OLLAMA_MODEL_NAME environment variable not set. Ollama features will be unavailable.")
-        OLLAMA_CONFIGURED = False 
-else:
-    logger.warning("Warning: Ollama SDK not installed. Ollama features will be unavailable.")
-    OLLAMA_CONFIGURED = False 
-
-# --- Pydantic Models ---
-class TranscriptionModelChoice(str, Enum):
+class ModelChoice(str, Enum):
     gemini = "gemini"
     whissle = "whissle"
+    deepgram = "deepgram"
 
-class AnnotationModelProvider(str, Enum):
-    gemini = "gemini"
-    ollama = "ollama"
+
+# Check Deepgram configuration
+DEEPGRAM_CONFIGURED = bool(DEEPGRAM_API_KEY)
+if DEEPGRAM_CONFIGURED:
+    try:
+        DEEPGRAM_CLIENT = DeepgramClient(DEEPGRAM_API_KEY)
+        logger.info("Deepgram client initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Deepgram client: {e}")
+        DEEPGRAM_CONFIGURED = False
+else:
+    logger.warning("Deepgram API key not set. Deepgram transcription disabled.")
 
 class ProcessRequest(BaseModel):
-    directory_path: str = Field(..., description="Absolute path to the directory containing audio files.", example="/path/to/audio")
-    output_jsonl_path: str = Field(..., description="Absolute path for the output JSONL manifest file.", example="/path/to/output/results.jsonl")
-    transcription_model_choice: TranscriptionModelChoice = Field(default=TranscriptionModelChoice.gemini, description="Choice of transcription model.")
-    annotation_provider: AnnotationModelProvider = Field(default=AnnotationModelProvider.gemini, description="Choice of annotation provider.")
+    directory_path: str = PydanticField(..., description="Absolute path to the directory containing audio files.", example="/path/to/audio")
+    model_choice: ModelChoice = PydanticField(..., description="The transcription model to use.")
+    output_jsonl_path: str = PydanticField(..., description="Absolute path for the output JSONL file.", example="/path/to/output/results.jsonl")
+    annotations: Optional[List[str]] = PydanticField(
+        None,
+        description="List of annotations to include (age, gender, emotion, entity, intent).",
+        example=["age", "gender", "emotion", "entity", "intent"] # Added entity and intent to example
+    )
+
+class TranscriptionJsonlRecord(BaseModel):
+    audio_filepath: str
+    text: Optional[str] = None
+    duration: Optional[float] = None
+    model_used_for_transcription: str
+    error: Optional[str] = None
+
+# New Pydantic model for BIO annotation structure
+class BioAnnotation(BaseModel):
+    tokens: List[str]
+    tags: List[str]
+
+# Updated AnnotatedJsonlRecord to match the new output format
+class AnnotatedJsonlRecord(BaseModel):
+    audio_filepath: str
+    text: Optional[str] = None  # Processed/cleaned transcription text
+    original_transcription: Optional[str] = None  # Original transcription text
+    duration: Optional[float] = None
+    task_name: Optional[str] = None # e.g., "NER" or "Annotation"
+    gender: Optional[str] = None
+    age_group: Optional[str] = None
+    emotion: Optional[str] = None
+    gemini_intent: Optional[str] = None
+    ollama_intent: Optional[str] = None # Placeholder for future Ollama integration
+    bio_annotation_gemini: Optional[BioAnnotation] = None
+    bio_annotation_ollama: Optional[BioAnnotation] = None # Placeholder for future Ollama integration
+    error: Optional[str] = None
+
 
 class ProcessResponse(BaseModel):
     message: str
@@ -229,48 +268,64 @@ class ProcessResponse(BaseModel):
     saved_records: int
     errors: int
 
-class TranscriptionJsonlRecord(BaseModel): # For transcription-only endpoint
-    audio_filepath: str
-    text: Optional[str] = None
-    duration: Optional[float] = None
-    model_used_for_transcription: str
-    error: Optional[str] = None
+# --- Helper Functions ---
+def validate_paths(dir_path_str: str, output_path_str: str) -> Tuple[Path, Path]:
+    dir_path = Path(dir_path_str)
+    output_jsonl_path = Path(output_path_str)
 
-class CustomAnnotatedJsonlRecord(BaseModel): 
-    audio_filepath: str
-    text: Optional[str] = Field(None, description="Transcription with ENTITY tags only")
-    duration: Optional[float] = None
-    task_name: Optional[str] = Field(None, description="Extracted from INTENT_ tag (e.g., INFORM, REQUEST_INFO)")
-    gender: Optional[str] = Field(None, description="Predicted gender (e.g., Male, Female, Unknown)")
-    age_group: Optional[str] = Field(None, description="Predicted age group (e.g., 18-24, 65+)")
-    emotion: Optional[str] = Field(None, description="Predicted emotion (e.g., Happy, Neutral, Unknown)")
-    transcription_model: str = Field(..., description="The model used for transcription (e.g., gemini, whissle)")
-    annotation_model: str = Field(..., description="The model used for annotation (e.g., gemini, ollama)")
+    if not dir_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Directory not found: {dir_path_str}")
 
-# --- Utility Functions ---
+    if not output_jsonl_path.parent.is_dir():
+        raise HTTPException(status_code=400, detail=f"Output directory does not exist: {output_jsonl_path.parent}")
+
+    return dir_path, output_jsonl_path
+
+def discover_audio_files(directory_path: Path) -> List[Path]:
+    audio_files = []
+    for ext in AUDIO_EXTENSIONS:
+        audio_files.extend(directory_path.glob(f"*{ext}"))
+        audio_files.extend(directory_path.glob(f"*{ext.upper()}")) # Also check for uppercase extensions
+    audio_files.sort() # Ensure consistent order
+    logger.info(f"Discovered {len(audio_files)} audio files in {directory_path}")
+    return audio_files
+
+
 def load_audio(audio_path: Path, target_sr: int = TARGET_SAMPLE_RATE) -> Tuple[Optional[np.ndarray], Optional[int], Optional[str]]:
     try:
         audio, sr = sf.read(str(audio_path), dtype='float32')
-        if audio.ndim > 1: audio = np.mean(audio, axis=1)
-        if sr != target_sr: audio = resampy.resample(audio, sr, target_sr); sr = target_sr
+        if audio.ndim > 1:
+            audio = np.mean(audio, axis=1) # Convert to mono
+        if sr != target_sr:
+            audio = resampy.resample(audio, sr, target_sr)
+            sr = target_sr
         return audio, sr, None
     except Exception as e:
         logger.error(f"Error loading audio file {audio_path}: {e}", exc_info=False)
         return None, None, f"Failed to load audio: {type(e).__name__}"
 
 def get_audio_duration(audio_path: Path) -> Optional[float]:
-    try: return sf.info(str(audio_path)).duration
+    try:
+        info = sf.info(str(audio_path))
+        return info.duration
     except Exception:
-        try: return librosa.get_duration(path=str(audio_path))
-        except Exception as le: logger.error(f"Failed to get duration for {audio_path.name}: {le}", exc_info=False); return None
+        try:
+            duration = librosa.get_duration(path=str(audio_path))
+            return duration
+        except Exception as le:
+             logger.error(f"Failed to get duration for {audio_path.name}: {le}", exc_info=False)
+             return None
 
 def predict_age_gender(audio_data: np.ndarray, sampling_rate: int) -> Tuple[Optional[float], Optional[int], Optional[str]]:
-    if age_gender_model is None or age_gender_processor is None: return None, None, "Age/Gender model not loaded."
-    if audio_data is None or len(audio_data) == 0: return None, None, "Empty audio data for Age/Gender."
+    if age_gender_model is None or age_gender_processor is None:
+        return None, None, "Age/Gender model not loaded."
+    if audio_data is None or len(audio_data) == 0:
+        return None, None, "Empty audio data provided for Age/Gender."
     try:
         inputs = age_gender_processor(audio_data, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
         input_values = inputs.input_values.to(device)
-        with torch.no_grad(): outputs = age_gender_model(input_values)
+        with torch.no_grad():
+            outputs = age_gender_model(input_values)
         age_pred = outputs[1].detach().cpu().numpy().flatten()[0]
         gender_logits = outputs[2].detach().cpu().numpy()
         gender_pred_idx = np.argmax(gender_logits, axis=1)[0]
@@ -280,50 +335,43 @@ def predict_age_gender(audio_data: np.ndarray, sampling_rate: int) -> Tuple[Opti
         return None, None, f"Age/Gender prediction failed: {type(e).__name__}"
 
 def predict_emotion(audio_data: np.ndarray, sampling_rate: int) -> Tuple[Optional[str], Optional[str]]:
-    if emotion_model is None or emotion_feature_extractor is None: return None, "Emotion model not loaded."
-    if audio_data is None or len(audio_data) == 0: return None, "Empty audio data for Emotion."
-    if len(audio_data) < int(sampling_rate * 0.1): return "SHORT_AUDIO", None
+    if emotion_model is None or emotion_feature_extractor is None:
+        return None, "Emotion model not loaded."
+    if audio_data is None or len(audio_data) == 0:
+        return None, "Empty audio data provided for Emotion."
+    min_length = int(sampling_rate * 0.1)
+    if len(audio_data) < min_length:
+        return "SHORT_AUDIO", None
     try:
         inputs = emotion_feature_extractor(audio_data, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
         inputs = {key: val.to(device) for key, val in inputs.items()}
-        with torch.no_grad(): outputs = emotion_model(**inputs)
-        predicted_class_idx = torch.argmax(outputs.logits, dim=-1).item()
+        with torch.no_grad():
+            outputs = emotion_model(**inputs)
+        logits = outputs.logits
+        predicted_class_idx = torch.argmax(logits, dim=-1).item()
         emotion_label = emotion_model.config.id2label.get(predicted_class_idx, "UNKNOWN_EMOTION")
         return emotion_label, None
     except Exception as e:
         logger.error(f"Error during Emotion prediction: {e}", exc_info=False)
         return None, f"Emotion prediction failed: {type(e).__name__}"
 
-def format_age_gender_emotion_tags_for_llm(age: Optional[float], gender_idx: Optional[int], emotion_label: Optional[str]) -> str:
-    # This function prepares tags to be *sent* to the LLM for preservation
-    tags = []
-    if age is not None:
-        try:
-            actual_age = round(age, 1)
-            age_brackets = [(18, "0_17"), (25, "18_24"), (35, "25_34"), (45, "35_44"), (55, "45_54"), (65, "55_64"), (float('inf'), "65PLUS")]
-            age_tag = next((bracket for threshold, bracket in age_brackets if actual_age < threshold), "UNKNOWN")
-            tags.append(f"AGE_{age_tag}")
-        except Exception: tags.append("AGE_ERROR")
-    else: tags.append("AGE_UNKNOWN")
-
-    if gender_idx == 1: tags.append("GENDER_MALE")
-    elif gender_idx == 0: tags.append("GENDER_FEMALE")
-    else: tags.append("GENDER_UNKNOWN")
-
-    if emotion_label and emotion_label != "SHORT_AUDIO": tags.append(f"EMOTION_{emotion_label.upper().replace(' ', '_')}")
-    elif emotion_label == "SHORT_AUDIO": tags.append("EMOTION_SHORT_AUDIO")
-    else: tags.append("EMOTION_UNKNOWN")
-    return " ".join(tags)
-
 async def transcribe_with_whissle_single(audio_path: Path, model_name="en-US-0.6b") -> tuple[Optional[str], Optional[str]]:
-    if not WHISSLE_CONFIGURED: return None, "Whissle is not configured."
+    if not WHISSLE_CONFIGURED:
+        return None, "Whissle is not configured."
     try:
         whissle_client = WhissleClient(auth_token=WHISSLE_AUTH_TOKEN)
         response = await whissle_client.speech_to_text(str(audio_path), model_name=model_name)
-        if isinstance(response, dict): text = response.get('text'); return (text.strip(), None) if text else (None, response.get('error') or response.get('message', 'Unknown Whissle API error'))
-        elif hasattr(response, 'transcript') and isinstance(response.transcript, str): return response.transcript.strip(), None
+        if isinstance(response, dict):
+             text = response.get('text')
+             if text is not None: return text.strip(), None
+             else:
+                 error_detail = response.get('error') or response.get('message', 'Unknown Whissle API error structure')
+                 return None, f"Whissle API error: {error_detail}"
+        elif hasattr(response, 'transcript') and isinstance(response.transcript, str):
+            return response.transcript.strip(), None
         else: return None, f"Unexpected Whissle response format: {type(response)}"
-    except Exception as e: return None, f"Whissle SDK error: {type(e).__name__}: {e}"
+    except Exception as e:
+        return None, f"Whissle SDK error: {type(e).__name__}: {e}"
 
 def get_mime_type(audio_file_path: Path) -> str:
     ext = audio_file_path.suffix.lower()
@@ -332,397 +380,482 @@ def get_mime_type(audio_file_path: Path) -> str:
 
 async def transcribe_with_gemini_single(audio_path: Path) -> tuple[Optional[str], Optional[str]]:
     if not GEMINI_CONFIGURED: return None, "Gemini API is not configured."
-    try: model = genai.GenerativeModel("models/gemini-1.5-flash")
+    model_name = "models/gemini-1.5-flash" # Or "models/gemini-1.5-pro" for higher quality potential
+    try: model = genai.GenerativeModel(model_name)
     except Exception as e: return None, f"Error initializing Gemini model: {e}"
+
+    mime_type = get_mime_type(audio_path)
     uploaded_file = None
     try:
-        uploaded_file = await asyncio.to_thread(genai.upload_file, path=str(audio_path), mime_type=get_mime_type(audio_path))
-        while uploaded_file.state.name == "PROCESSING": await asyncio.sleep(2); uploaded_file = await asyncio.to_thread(genai.get_file, name=uploaded_file.name)
-        if uploaded_file.state.name != "ACTIVE": err_msg = f"Gemini file processing failed: {uploaded_file.state.name}"; return None, err_msg
-        prompt = "Transcribe audio. Provide only spoken text. If no speech, return empty string."
+        uploaded_file = await asyncio.to_thread(genai.upload_file, path=str(audio_path), mime_type=mime_type)
+        while uploaded_file.state.name == "PROCESSING":
+            await asyncio.sleep(2)
+            uploaded_file = await asyncio.to_thread(genai.get_file, name=uploaded_file.name)
+        if uploaded_file.state.name != "ACTIVE":
+            error_msg = f"Gemini file processing failed for {audio_path.name}. State: {uploaded_file.state.name}"
+            try: await asyncio.to_thread(genai.delete_file, name=uploaded_file.name)
+            except Exception as del_e: logger.warning(f"Could not delete failed Gemini resource {uploaded_file.name}: {del_e}")
+            return None, error_msg
+
+        prompt = "Transcribe the audio accurately. Provide only the spoken text. If no speech is detected, return an empty string."
         response = await asyncio.to_thread(model.generate_content, [prompt, uploaded_file], request_options={'timeout': 300})
+        
+        # Ensure file is deleted after response
+        try: await asyncio.to_thread(genai.delete_file, name=uploaded_file.name); uploaded_file = None
+        except Exception as del_e: logger.warning(f"Could not delete Gemini resource {uploaded_file.name} after transcription: {del_e}")
+
         if response.candidates:
-            transcription = "".join(part.text for part in response.candidates[0].content.parts if hasattr(part, 'text')).strip()
-            return transcription if transcription else "", None
-        else: return None, f"No candidates from Gemini. Feedback: {getattr(response.prompt_feedback, 'block_reason_message', str(response.prompt_feedback)) if hasattr(response, 'prompt_feedback') else 'N/A'}"
-    except Exception as e: return None, f"Gemini transcription error: {type(e).__name__}: {e}"
-    finally:
+            try:
+                if hasattr(response, 'text') and response.text is not None: transcription = response.text.strip()
+                elif response.candidates[0].content.parts: transcription = "".join(part.text for part in response.candidates[0].content.parts).strip()
+                else: return None, "Gemini response candidate found, but no text content."
+                return transcription if transcription else "", None # Return empty string for no speech
+            except (AttributeError, IndexError, ValueError, TypeError) as resp_e:
+                return None, f"Error parsing Gemini transcription response: {resp_e}"
+        else:
+            error_message = f"No candidates from Gemini transcription for {audio_path.name}."
+            if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                 feedback = getattr(response.prompt_feedback, 'block_reason_message', str(response.prompt_feedback))
+                 error_message += f" Feedback: {feedback}"
+            return None, error_message
+    except Exception as e:
         if uploaded_file and hasattr(uploaded_file, 'name'):
             try: await asyncio.to_thread(genai.delete_file, name=uploaded_file.name)
-            except Exception as del_e: logger.warning(f"Could not delete Gemini file {uploaded_file.name}: {del_e}")
-
-def remove_existing_tags(text: str) -> str: # For preparing LLM input
-    if not isinstance(text, str): return text
-    preserve_patterns = [ r'\bAGE_[A-Z0-9_]+\b', r'\bGENDER_(MALE|FEMALE|OTHER|UNKNOWN)\b', r'\bEMOTION_[A-Z_]+\b', r'\bSPEAKER_CHANGE\b', r'ENTITY_[A-Z0-9_]+\s+[\s\S]*?\s+END\b' ]
-    preserved_tags_map, placeholder_count = {}, 0
-    def replace_with_placeholder(match): nonlocal placeholder_count; tag_content, placeholder = match.group(0), f"__P_{placeholder_count}__"; preserved_tags_map[placeholder] = tag_content; placeholder_count += 1; return f" {placeholder} "
-    temp_text = text
-    for pattern in preserve_patterns: temp_text = re.sub(pattern, replace_with_placeholder, temp_text, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\s*INTENT_[A-Z_0-9]+\s*', ' ', temp_text, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\bNER_\w+\s*', ' ', cleaned, flags=re.IGNORECASE)
-    for placeholder, original in preserved_tags_map.items(): cleaned = cleaned.replace(f" {placeholder} ", f" {original} ")
-    return re.sub(r'\s{2,}', ' ', cleaned).strip()
-
-def fix_end_tags(text: str) -> str: # For LLM output cleanup
-    if not isinstance(text, str): return text
-    text = re.sub(r'(ENTITY_[A-Z0-9_]+)\s+([A-Z0-9])\s+END\b', r'\1\2 END', text, flags=re.IGNORECASE)
-    text = re.sub(r'(\S)END\b', r'\1 END', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(ENTITY_[A-Z0-9_]+)(\S)', r'\1 \2', text, flags=re.IGNORECASE)
-    text = re.sub(r'(\S)(INTENT_[A-Z_0-9]+\b)', r'\1 \2', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bEND(\S)', r'END \1', text, flags=re.IGNORECASE)
-    return re.sub(r'\s{2,}', ' ', text).strip()
-
-_entity_list_json_str = """["PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE", "DATE", "TIME", "DURATION", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "NUMBER", "DEADLINE", "DELIVERY_DATE", "DELIVERY_TIME", "EVENT", "MEETING", "TASK", "PROJECT_NAME", "ACTION_ITEM", "PRIORITY", "FEEDBACK", "REVIEW", "RATING", "COMPLAINT", "QUESTION", "RESPONSE", "NOTIFICATION_TYPE", "AGENDA", "REMINDER", "NOTE", "RECORD", "ANNOUNCEMENT", "UPDATE", "SCHEDULE", "BOOKING_REFERENCE", "APPOINTMENT_NUMBER", "ORDER_NUMBER", "INVOICE_NUMBER", "PAYMENT_METHOD", "PAYMENT_AMOUNT", "BANK_NAME", "ACCOUNT_NUMBER", "CREDIT_CARD_NUMBER", "TAX_ID", "SOCIAL_SECURITY_NUMBER", "DRIVER'S_LICENSE", "PASSPORT_NUMBER", "INSURANCE_PROVIDER", "POLICY_NUMBER", "INSURANCE_PLAN", "CLAIM_NUMBER", "POLICY_HOLDER", "BENEFICIARY", "RELATIONSHIP", "EMERGENCY_CONTACT", "PROJECT_PHASE", "VERSION", "DEVELOPMENT_STAGE", "DEVICE_NAME", "OPERATING_SYSTEM", "SOFTWARE_VERSION", "BRAND", "MODEL_NUMBER", "LICENSE_PLATE", "VEHICLE_MAKE", "VEHICLE_MODEL", "VEHICLE_TYPE", "FLIGHT_NUMBER", "HOTEL_NAME", "ROOM_NUMBER", "TRANSACTION_ID", "TICKET_NUMBER", "SEAT_NUMBER", "GATE", "TERMINAL", "TRANSACTION_TYPE", "PAYMENT_STATUS", "PAYMENT_REFERENCE", "INVOICE_STATUS", "SYMPTOM", "DIAGNOSIS", "MEDICATION", "DOSAGE", "ALLERGY", "PRESCRIPTION", "TEST_NAME", "TEST_RESULT", "MEDICAL_RECORD", "HEALTH_STATUS", "HEALTH_METRIC", "VITAL_SIGN", "DOCTOR_NAME", "HOSPITAL_NAME", "DEPARTMENT", "WARD", "CLINIC_NAME", "WEBSITE", "URL", "IP_ADDRESS", "MAC_ADDRESS", "USERNAME", "PASSWORD", "LANGUAGE", "CODE_SNIPPET", "DATABASE_NAME", "API_KEY", "WEB_TOKEN", "URL_PARAMETER", "SERVER_NAME", "ENDPOINT", "DOMAIN", "PRODUCT", "SERVICE", "CATEGORY", "BRAND_NAME", "ORDER_STATUS", "DELIVERY_METHOD", "RETURN_STATUS", "WARRANTY_PERIOD", "CANCELLATION_REASON", "REFUND_AMOUNT", "EXCHANGE_ITEM", "GIFT_OPTION", "GIFT_MESSAGE", "FOOD_ITEM", "DRINK_ITEM", "CUISINE", "MENU_ITEM", "RECIPE", "INGREDIENT", "DISH_NAME", "PORTION_SIZE", "COOKING_TIME", "PREPARATION_METHOD", "NATIONALITY", "RELIGION", "MARITAL_STATUS", "OCCUPATION", "EDUCATION_LEVEL", "DEGREE", "SKILL", "EXPERIENCE", "YEARS_OF_EXPERIENCE", "CERTIFICATION", "MEASUREMENT", "DISTANCE", "WEIGHT", "HEIGHT", "VOLUME", "TEMPERATURE", "SPEED", "CAPACITY", "DIMENSION", "AREA", "SHAPE", "COLOR", "MATERIAL", "TEXTURE", "PATTERN", "STYLE", "WEATHER_CONDITION", "TEMPERATURE_SETTING", "HUMIDITY_LEVEL", "WIND_SPEED", "RAIN_INTENSITY", "AIR_QUALITY", "POLLUTION_LEVEL", "UV_INDEX", "QUESTION_TYPE", "REQUEST_TYPE", "SUGGESTION_TYPE", "ALERT_TYPE", "REMINDER_TYPE", "STATUS", "ACTION", "COMMAND", "USER_HANDLE", "EMAIL_ADDRESS", "PHONE_NUMBER", "IPV4_ADDRESS", "IPV6_ADDRESS", "GPS_COORDINATE", "LATITUDE", "LONGITUDE", "GEOLOCATION", "STREET_NAME", "BUILDING_NUMBER", "FLOOR_NUMBER", "BUSINESS_NAME", "MODEL", "SERIAL_NUMBER", "IMEI", "IMSI", "DEVICE_ID", "OS_VERSION", "FILE_PATH", "FILE_NAME", "FILE_EXTENSION", "DOCUMENT_TITLE", "DOCUMENT_ID", "LEGAL_ENTITY", "TAX_DOCUMENT", "BILLING_ADDRESS", "SHIPPING_ADDRESS", "COUPON_CODE", "LOYALTY_CARD_NUMBER", "PRODUCT_ID", "SKU", "BARCODE", "QR_CODE", "TRANSACTION_CODE", "EVENT_ID", "SESSION_ID", "ACTION_ID", "CLICK_POSITION", "SCROLL_DEPTH", "VIDEO_ID", "AUDIO_TRACK", "SUBTITLE_LANGUAGE", "CHAPTER_TITLE", "CHAPTER_NUMBER", "EPISODE_NUMBER", "MOVIE_TITLE", "DIRECTOR_NAME", "ACTOR_NAME", "BOOK_TITLE", "AUTHOR_NAME", "PUBLISHER", "ISBN", "ISSN", "COURSE_NAME", "INSTRUCTOR_NAME", "STUDENT_ID", "GRADE", "CLASSROOM_NUMBER", "SCHOOL_NAME", "DEGREE_PROGRAM", "MAJOR", "MINOR", "CERTIFICATE_NAME", "EXAM_SCORE", "CERTIFICATION_ID", "TRAINING_PROGRAM", "PLATFORM", "APPLICATION", "SOFTWARE_PACKAGE", "API_ENDPOINT", "SERVICE_NAME", "SERVER_IP", "DATABASE_TABLE", "QUERY", "ERROR_CODE", "LOG_LEVEL", "SESSION_DURATION", "BROWSER_TYPE", "DEVICE_TYPE"]"""
-_parsed_entity_list = json.loads(_entity_list_json_str)
-_entity_list_for_prompt_str = ", ".join(f'"{entity}"' for entity in _parsed_entity_list)
-
-def _build_annotation_prompt(cleaned_text_for_prompt: str) -> str:
-    return f'''Analyze the following sentence. It might already contain tags like AGE_*, GENDER_*, EMOTION_*, SPEAKER_CHANGE, or correctly formatted ENTITY_<TYPE> existing entity END tags.
-
-Your tasks are:
-1.  **Preserve Existing Tags:** Keep any AGE_*, GENDER_*, EMOTION_*, SPEAKER_CHANGE, or correctly pre-tagged `ENTITY_<TYPE> text END` tags exactly where they are.
-2.  **Annotate NEW Entities:** Identify and tag NEW entities in parts of the text NOT already tagged as `ENTITY_<TYPE> text END`. Tag these new entities **only** from this specific list: [{_entity_list_for_prompt_str}]. Use the format `ENTITY_<TYPE> identified text END`.
-3.  **Classify Intent:** Determine the primary intent. Choose **one** label from: `REQUEST_INFO`, `PROVIDE_INFO`, `BOOK_APPOINTMENT`, `CANCEL_APPOINTMENT`, `RESCHEDULE_APPOINTMENT`, `PROVIDE_FEEDBACK`, `MAKE_PURCHASE`, `RETURN_ITEM`, `TRACK_ORDER`, `SOCIAL_CHITCHAT`, `HEALTH_UPDATE`, `REQUEST_ASSISTANCE`, `TECHNICAL_SUPPORT`, `CONFIRMATION`, `DENIAL`, `GREETING`, `FAREWELL`, `AGREEMENT`, `DISAGREEMENT`, `EXPRESS_EMOTION`, `OTHER`. If no clear intent fits, use `OTHER`.
-4.  **Add Intent Tag:** Append exactly ONE `INTENT_<ChosenIntentLabel>` tag at the VERY END of the entire processed sentence.
-5.  **Output:** Return the fully processed sentence as a single string. Do not wrap in quotes or markdown.
-
-**CRITICAL FORMATTING RULES:**
-*   `ENTITY_<TYPE> text END` (Correct). `<TYPE>` must be from the list, no spaces within `<TYPE>`.
-*   Final `INTENT_<TYPE>` tag must be the absolute last part of the output string.
-
-**Example Input (Tagging new entities, preserving AGE/GENDER):** "can you book a flight for alice to paris on next tuesday GENDER_FEMALE AGE_25_34 EMOTION_NEUTRAL"
-**Example Output:** "can you book a flight for ENTITY_PERSON_NAME alice END to ENTITY_CITY paris END on ENTITY_DATE next tuesday END GENDER_FEMALE AGE_25_34 EMOTION_NEUTRAL INTENT_BOOK_APPOINTMENT"
-
-**Text to Annotate:** "{cleaned_text_for_prompt}"'''
-
-async def _annotate_text_llm_common(text_to_annotate: str, llm_provider: AnnotationModelProvider) -> tuple[Optional[str], Optional[str]]:
-    if not text_to_annotate or text_to_annotate.isspace(): return "", None
-    cleaned_text_for_prompt = remove_existing_tags(text_to_annotate)
-    if not cleaned_text_for_prompt or cleaned_text_for_prompt.isspace(): return text_to_annotate, None
-    
-    prompt = _build_annotation_prompt(cleaned_text_for_prompt)
-    annotated_text: Optional[str] = None
-    error_detail: Optional[str] = None
-
-    if llm_provider == AnnotationModelProvider.gemini:
-        if not GEMINI_CONFIGURED: return text_to_annotate, "Gemini API not configured."
-        logger.info(f"Annotating with Gemini (input: '{cleaned_text_for_prompt[:100]}...')")
-        try:
-            model = genai.GenerativeModel("gemini-1.5-pro-latest")
-            generation_config = genai.types.GenerationConfig(temperature=0.1)
-            response = await asyncio.to_thread(model.generate_content, contents=[prompt], generation_config=generation_config, request_options={'timeout': 180})
-            if response.candidates:
-                annotated_text = "".join(part.text for part in response.candidates[0].content.parts if hasattr(part, 'text')).strip()
-            else: error_detail = f"No candidates from Gemini. Feedback: {getattr(response.prompt_feedback, 'block_reason_message', str(response.prompt_feedback)) if hasattr(response, 'prompt_feedback') else 'N/A'}"
-        except Exception as e: error_detail = f"Gemini API error: {type(e).__name__}: {e}"
-
-    elif llm_provider == AnnotationModelProvider.ollama:
-        if not OLLAMA_CONFIGURED or not OLLAMA_MODEL_TO_USE: return text_to_annotate, f"Ollama not configured or model not set (current: {OLLAMA_MODEL_TO_USE or 'Not Set'})."
-        logger.info(f"Annotating with Ollama (model: '{OLLAMA_MODEL_TO_USE}', input: '{cleaned_text_for_prompt[:100]}...')")
-        try:
-            response = await asyncio.to_thread(
-                chat,
-                model=OLLAMA_MODEL_TO_USE,
-                messages=[{'role': 'user', 'content': prompt}]
-            )
-            if response and hasattr(response, 'message') and hasattr(response.message, 'content'):
-                annotated_text = response.message.content.strip()
-            else: error_detail = f"Unexpected Ollama response format: {str(response)[:200]}"
-        except Exception as e: error_detail = f"Ollama annotation error: {type(e).__name__}: {e}"
-
-    if error_detail: return text_to_annotate, error_detail
-    if not annotated_text: return text_to_annotate, f"{llm_provider.value} response text extracted as empty."
-
-    # Common cleanup for LLM outputs
-    if annotated_text.startswith("```") and annotated_text.endswith("```"):
-        annotated_text = re.sub(r'^```[a-z]*\n?|\n?```$', '', annotated_text).strip()
-    if len(annotated_text) > 1 and annotated_text.startswith('"') and annotated_text.endswith('"'):
-        content_inside_quotes = annotated_text[1:-1]
-        if not re.search(r'INTENT_[A-Z_0-9]+$', content_inside_quotes.strip()): annotated_text = content_inside_quotes
-        else: annotated_text = content_inside_quotes
-    
-    final_text = fix_end_tags(annotated_text).strip()
-    if not re.search(r'INTENT_[A-Z_0-9]+$', final_text):
-        logger.warning(f"{llm_provider.value} annotation missing INTENT tag: '{final_text[-70:]}'")
-        final_text = f"{final_text} INTENT_UNKNOWN".strip()
-    
-    logger.info(f"{llm_provider.value} annotation successful (result: '{final_text[:100]}...')")
-    return final_text, None
-
-# --- New parsing function for custom output format ---
-def parse_custom_output_fields(llm_annotated_text: Optional[str]) -> Dict[str, Optional[str]]:
-    parsed_fields = {
-        "text_with_entities": None,
-        "task_name": "UNKNOWN",
-        "gender": "Unknown",
-        "age_group": "Unknown",
-        "emotion": "Unknown",
-    }
-    if not llm_annotated_text:
-        return parsed_fields
-
-    text_for_entities = llm_annotated_text
-
-    # 1. Extract Intent (Task Name)
-    intent_match = re.search(r'\sINTENT_([A-Z_0-9]+)$', text_for_entities)
-    if intent_match:
-        parsed_fields["task_name"] = intent_match.group(1).upper()
-        text_for_entities = text_for_entities[:intent_match.start()].strip()
-
-    # 2. Extract Gender
-    gender_pattern = r'\s?\bGENDER_(MALE|FEMALE|OTHER|UNKNOWN)\b\s?'
-    gender_match = re.search(gender_pattern, text_for_entities, re.IGNORECASE)
-    if gender_match:
-        gender_tag = gender_match.group(1).upper()
-        if gender_tag == "MALE": parsed_fields["gender"] = "Male"
-        elif gender_tag == "FEMALE": parsed_fields["gender"] = "Female"
-        else: parsed_fields["gender"] = "Unknown"
-        text_for_entities = re.sub(gender_pattern, ' ', text_for_entities, count=1, flags=re.IGNORECASE).strip()
-
-    # 3. Extract Age Group
-    age_pattern = r'\s?\bAGE_([0-9]{1,2}_[0-9]{1,2}|[0-9]{1,2}PLUS|UNKNOWN|ERROR)\b\s?'
-    age_match = re.search(age_pattern, text_for_entities, re.IGNORECASE)
-    if age_match:
-        age_tag_raw = age_match.group(1).upper()
-        if age_tag_raw == "UNKNOWN" or age_tag_raw == "ERROR": parsed_fields["age_group"] = "Unknown"
-        elif "PLUS" in age_tag_raw: parsed_fields["age_group"] = age_tag_raw.replace("PLUS", "+")
-        elif "_" in age_tag_raw: parsed_fields["age_group"] = age_tag_raw.replace("_", "-")
-        else: parsed_fields["age_group"] = age_tag_raw 
-        text_for_entities = re.sub(age_pattern, ' ', text_for_entities, count=1, flags=re.IGNORECASE).strip()
-    
-    # 4. Extract Emotion
-    emotion_pattern = r'\s?\bEMOTION_([A-Z_]+)\b\s?'
-    emotion_match = re.search(emotion_pattern, text_for_entities, re.IGNORECASE)
-    if emotion_match:
-        emotion_tag_raw = emotion_match.group(1).upper()
-        if emotion_tag_raw in ["SHORT_AUDIO", "UNKNOWN"]: parsed_fields["emotion"] = "Unknown"
-        else: parsed_fields["emotion"] = emotion_tag_raw.replace("_", " ").capitalize()
-        text_for_entities = re.sub(emotion_pattern, ' ', text_for_entities, count=1, flags=re.IGNORECASE).strip()
-
-    parsed_fields["text_with_entities"] = re.sub(r'\s{2,}', ' ', text_for_entities).strip()
-    if parsed_fields["text_with_entities"] in {"[NO_SPEECH]", "[TRANSCRIPTION_FAILED]", "[PROCESSING_ERROR]"}:
-        # If the remaining text is a placeholder, it means original transcription was that.
-        # The `task_name` would reflect NO_SPEECH or TRANSCRIPTION_FAILED if set correctly by the earlier logic.
-        pass # Keep the placeholder in text_with_entities for these cases.
-        
-    return parsed_fields
+            except Exception as del_e: logger.warning(f"Could not delete temp Gemini file {uploaded_file.name} after error: {del_e}")
+        return None, f"Gemini API/SDK error during transcription: {type(e).__name__}: {e}"
+    finally: # Redundant with above but good practice for ensuring cleanup
+        if uploaded_file and hasattr(uploaded_file, 'name'):
+             try: await asyncio.to_thread(genai.delete_file, name=uploaded_file.name)
+             except Exception as del_e: logger.warning(f"Could not delete Gemini file {uploaded_file.name} in finally: {del_e}")
 
 
-def validate_paths(directory_path: str, output_jsonl_path: str) -> Tuple[Path, Path]:
-    try: dir_path = Path(directory_path).resolve(strict=True)
-    except Exception as e: raise HTTPException(status_code=400, detail=f"Invalid dir path: {e}")
-    if not dir_path.is_dir(): raise HTTPException(status_code=404, detail=f"Dir not found: {dir_path}")
-    try: output_path = Path(output_jsonl_path).resolve(); output_path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception as e: raise HTTPException(status_code=400, detail=f"Invalid output path: {e}")
-    if output_path.is_dir(): raise HTTPException(status_code=400, detail=f"Output path is dir: {output_path}")
-    if not os.access(output_path.parent, os.W_OK): raise HTTPException(status_code=403, detail=f"No write perm: {output_path.parent}")
-    if output_path.exists(): logger.warning(f"Output file {output_path} exists and will be overwritten.")
-    return dir_path, output_path
+def get_annotation_prompt(texts_to_annotate: List[str]) -> str:
+    """
+    Generates the core prompt for BIO entity and utterance-level intent annotation.
+    """
+    all_entity_types_str = ", ".join(ENTITY_TYPES)
+    all_intent_types_str = ", ".join(INTENT_TYPES)
 
-def discover_audio_files(dir_path: Path) -> List[Path]:
-    try: files = [f for f in dir_path.iterdir() if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS]; logger.info(f"Found {len(files)} audio files in {dir_path}"); return files
-    except Exception as e: raise HTTPException(status_code=500, detail=f"Error scanning dir: {e}")
+    return f'''You are an expert linguistic annotator for English text.
+You will receive a list of English sentences. Each sentence is a raw lowercase transcription.
+
+Your task is crucial and requires precision. For each sentence, you must:
+1.  **TOKENIZE:** Split the sentence into individual words (tokens).
+2.  **ASSIGN BIO TAGS:** For each token, assign exactly one BIO tag according to the following rules:
+    *   **ENTITY TAGS (Priority):** Identify entities using the provided `ENTITY_TYPES` list.
+        *   `B-<ENTITY_TYPE>` for the *beginning* of an entity phrase (e.g., `B-PERSON_NAME`).
+        *   `I-<ENTITY_TYPE>` for *inside* an entity phrase (e.g., `I-PERSON_NAME`).
+    *   **UTTERANCE INTENT TAGS (Default/Fallback):** If a token is *not* part of any specific entity, it should be tagged to reflect the overall intent of the utterance.
+        *   The first token of the sentence (if not an entity) should be `B-<UTTERANCE_INTENT>`.
+        *   Subsequent non-entity tokens should be `I-<UTTERANCE_INTENT>`.
+        *   The `<UTTERANCE_INTENT>` should be chosen from the `INTENT_TYPES` list.
+    *   **IMPORTANT:** Ensure every token has a tag. If no specific entity or clear intent can be assigned, use `O` (Outside) for tokens.
+
+3.  **EXTRACT INTENT:** In addition to tagging, determine and provide the single overall `intent` of the utterance as a separate field. This `intent` should be one of the `INTENT_TYPES`.
+
+4.  **OUTPUT FORMAT (CRITICAL):** Return a JSON array of objects. Each object in the array must contain:
+    *   `text`: The original lowercase input sentence (for verification purposes).
+    *   `tokens`: A JSON array of the tokenized words.
+    *   `tags`: A JSON array of the BIO tags, corresponding one-to-one with the `tokens` array.
+    *   `intent`: A single string representing the overall utterance intent.
+
+**ENTITY TYPES LIST (USE ONLY THESE FOR ENTITY TAGS):**
+{json.dumps(ENTITY_TYPES, ensure_ascii=False, indent=2)}
+
+**INTENT TYPES LIST (USE ONE FOR UTTERANCE INTENT AND FOR DEFAULT TAGS):**
+{json.dumps(INTENT_TYPES, ensure_ascii=False, indent=2)}
+
+**Example Input String 1 (with entities):**
+"then if he becomes a champion, he's entitled to more money after that and champion end"
+
+**CORRECT Example Output 1 (assuming intent is INFORM and "champion" is a PROJECT_NAME):**
+```json
+[
+  {{
+    "text": "then if he becomes a champion, he's entitled to more money after that and champion end",
+    "tokens": ["then", "if", "he", "becomes", "a", "champion", ",", "he's", "entitled", "to", "more", "money", "after", "that", "and", "champion", "end"],
+    "tags": ["B-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "B-PROJECT_NAME", "O", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "B-PROJECT_NAME", "O"],
+    "intent": "INFORM"
+  }}
+]
+Sentences to Annotate Now:
+{json.dumps(texts_to_annotate, ensure_ascii=False, indent=2)}
+'''
+async def annotate_text_structured_with_gemini(text_to_annotate: str) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[str], Optional[str]]:
+    """
+    Annotates a single text string using Gemini to get structured BIO tags and intent.
+    Returns (tokens, tags, intent, error_message).
+    """
+    if not GEMINI_CONFIGURED:
+        return None, None, None, "Gemini API is not configured."
+    if not text_to_annotate or text_to_annotate.isspace():
+        return [], [], "NO_SPEECH_INPUT", None # Return empty lists and specific intent for empty input
+    prompt = get_annotation_prompt([text_to_annotate.lower()])
+
+    try:
+        model = genai.GenerativeModel("models/gemini-1.5-flash") # Or your preferred Gemini model
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+        response = await asyncio.to_thread(
+            model.generate_content,
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                response_mime_type="application/json", # Request JSON output
+            ),
+            safety_settings=safety_settings,
+            request_options={'timeout': 120} # Increased timeout
+        )
+
+        if response.candidates:
+            raw_json_output = response.text.strip()
+            logger.debug(f"Gemini raw JSON output for BIO: {raw_json_output}")
+            
+            try:
+                parsed_data_list = json.loads(raw_json_output)
+                if not isinstance(parsed_data_list, list) or not parsed_data_list:
+                    logger.error(f"Gemini BIO annotation did not return a list or returned an empty list: {raw_json_output}")
+                    return None, None, None, "Gemini BIO: Invalid or empty list format"
+
+                annotation_object = parsed_data_list[0] # Expecting one object for one input sentence
+
+                tokens = annotation_object.get("tokens")
+                tags = annotation_object.get("tags")
+                intent = annotation_object.get("intent")
+
+                if not (isinstance(tokens, list) and isinstance(tags, list) and isinstance(intent, str)):
+                    logger.error(f"Gemini BIO: Invalid types for tokens, tags, or intent. Tokens: {type(tokens)}, Tags: {type(tags)}, Intent: {type(intent)}")
+                    return None, None, None, "Gemini BIO: Type mismatch in parsed data"
+                
+                if len(tokens) != len(tags):
+                    logger.error(f"Gemini BIO: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts.")
+                    return None, None, None, "Gemini BIO: Token/Tag count mismatch"
+                    
+                return tokens, tags, intent.upper(), None # Success
+            except json.JSONDecodeError as json_e:
+                logger.error(f"Gemini BIO annotation JSON decoding failed: {json_e}. Response: {raw_json_output}")
+                return None, None, None, f"Gemini BIO: JSONDecodeError - {json_e}"
+            except Exception as e:
+                logger.error(f"Error parsing Gemini BIO annotation response: {e}. Response: {raw_json_output}")
+                return None, None, None, f"Gemini BIO: Parsing error - {e}"
+        else:
+            error_message = f"No candidates from Gemini BIO annotation for text: {text_to_annotate[:100]}..."
+            if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                feedback = getattr(response.prompt_feedback, 'block_reason_message', str(response.prompt_feedback))
+                error_message += f" Feedback: {feedback}"
+            logger.error(error_message)
+            return None, None, None, error_message
+
+    except Exception as e:
+        logger.error(f"Gemini API/SDK error during BIO annotation: {type(e).__name__}: {e}", exc_info=True)
+        return None, None, None, f"Gemini API/SDK error: {type(e).__name__}"
+
+
+async def transcribe_with_deepgram_single(audio_path: Path) -> tuple[Optional[str], Optional[str]]:
+    if not DEEPGRAM_CONFIGURED:
+        return None, "Deepgram not configured."
+    try:
+        with open(audio_path, "rb") as audio_file:
+            buffer_data = audio_file.read()
+        options = PrerecordedOptions(
+            model="nova-2",
+            smart_format=True,
+            diarize=False,
+            language="en"
+        )
+        # Run synchronous Deepgram call in a thread to avoid blocking
+        response = await asyncio.to_thread(
+            DEEPGRAM_CLIENT.listen.prerecorded.v("1").transcribe_file,
+            {"buffer": buffer_data, "mimetype": get_mime_type(audio_path)},
+            options
+        )
+        transcript = response["results"]["channels"][0]["alternatives"][0]["transcript"]
+        if not transcript:
+            return "", None # Return empty string for no speech, no error
+        return transcript, None
+    except Exception as e:
+        logger.error(f"Deepgram transcription error for {audio_path.name}: {e}")
+        return None, f"Deepgram error: {str(e)}"
+
 
 @app.post("/create_transcription_manifest/", response_model=ProcessResponse, summary="Create Transcription-Only Manifest")
 async def create_transcription_manifest_endpoint(process_request: ProcessRequest):
-    trans_model = process_request.transcription_model_choice
-    if trans_model == TranscriptionModelChoice.whissle and not WHISSLE_CONFIGURED: raise HTTPException(status_code=400, detail="Whissle not configured.")
-    if trans_model == TranscriptionModelChoice.gemini and not GEMINI_CONFIGURED: raise HTTPException(status_code=400, detail="Gemini for transcription not configured.")
-
+    model_choice = process_request.model_choice
+    if model_choice == ModelChoice.whissle and not WHISSLE_CONFIGURED: 
+        raise HTTPException(status_code=400, detail="Whissle not configured.")
+    if model_choice == ModelChoice.gemini and not GEMINI_CONFIGURED: 
+        raise HTTPException(status_code=400, detail="Gemini not configured.")
+    if model_choice == ModelChoice.deepgram and not DEEPGRAM_CONFIGURED:
+        raise HTTPException(status_code=400, detail="Deepgram not configured.")
     dir_path, output_jsonl_path = validate_paths(process_request.directory_path, process_request.output_jsonl_path)
     audio_files = discover_audio_files(dir_path)
-    if not audio_files:
-        try: open(output_jsonl_path, "w").close(); return ProcessResponse(message="No audio files. Empty manifest created.", output_file=str(output_jsonl_path), processed_files=0, saved_records=0, errors=0)
-        except IOError as e: raise HTTPException(status_code=500, detail=f"Failed to create empty output: {e}")
 
-    processed, saved, errors = 0, 0, 0
+    if not audio_files:
+        try:
+            with open(output_jsonl_path, "w", encoding="utf-8") as _: pass
+        except IOError as e: 
+            raise HTTPException(status_code=500, detail=f"Failed to create empty output file: {e}")
+        return ProcessResponse(message=f"No audio files. Empty manifest created.", output_file=str(output_jsonl_path), processed_files=0, saved_records=0, errors=0)
+
+    processed_files_count = 0; saved_records_count = 0; error_count = 0
     try:
         with open(output_jsonl_path, "w", encoding="utf-8") as outfile:
             for audio_file in audio_files:
-                processed += 1; file_err, text, duration_val = None, None, None
-                logger.info(f"--- Processing {audio_file.name} (Transcription Only: {trans_model.value}) ---")
+                file_error: Optional[str] = None; transcription_text: Optional[str] = None; duration: Optional[float] = None
+                logger.info(f"--- Processing {audio_file.name} (Transcription Only) ---")
+                processed_files_count += 1
                 try:
-                    duration_val = get_audio_duration(audio_file)
-                    if trans_model == TranscriptionModelChoice.whissle: text, trans_err = await transcribe_with_whissle_single(audio_file)
-                    else: text, trans_err = await transcribe_with_gemini_single(audio_file)
-                    if trans_err: file_err = f"Transcription failed: {trans_err}"
-                    elif text is None: file_err = "Transcription returned None."
-                    else: text = text.strip()
-                except Exception as e: file_err = f"Unexpected error: {type(e).__name__}: {e}"
-                
-                # Get specific model name
-                transcription_model_name = trans_model.value
-                
-                record = TranscriptionJsonlRecord(audio_filepath=str(audio_file.resolve()), text=text, duration=duration_val, model_used_for_transcription=transcription_model_name, error=file_err)
-                try: outfile.write(record.model_dump_json(exclude_none=True) + "\n")
-                except Exception as write_e: file_err = f"{file_err or ''}; JSONL write error: {write_e}".strip('; ')
-                if file_err: errors += 1
-                else: saved += 1
-                gc.collect()
-    except IOError as e: raise HTTPException(status_code=500, detail=f"Failed to write output: {e}")
-    return ProcessResponse(message=f"Processed {processed}/{len(audio_files)}. Saved: {saved}. Errors: {errors}.", output_file=str(output_jsonl_path), processed_files=processed, saved_records=saved, errors=errors)
+                    duration = get_audio_duration(audio_file)
+                    if model_choice == ModelChoice.whissle:
+                        transcription_text, transcription_error = await transcribe_with_whissle_single(audio_file)
+                    elif model_choice == ModelChoice.gemini:
+                        transcription_text, transcription_error = await transcribe_with_gemini_single(audio_file)
+                    else:  # Deepgram
+                        transcription_text, transcription_error = await transcribe_with_deepgram_single(audio_file)
+                    if transcription_error:
+                        file_error = f"Transcription failed: {transcription_error}"
+                    elif transcription_text is None: # Should only happen if a transcription function returns None, not ""
+                        file_error = "Transcription returned None."
+                    # transcription_text can be "" for no speech, which is fine
+                except Exception as e:
+                    file_error = f"Unexpected error: {type(e).__name__}: {e}"
 
-@app.post("/create_annotated_manifest/", response_model=ProcessResponse, summary="Create Annotated Manifest (Custom Format)")
-async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
-    trans_model = process_request.transcription_model_choice
-    annot_provider = process_request.annotation_provider
-
-    if trans_model == TranscriptionModelChoice.whissle and not WHISSLE_CONFIGURED: raise HTTPException(status_code=400, detail="Whissle (transcription) not configured.")
-    if trans_model == TranscriptionModelChoice.gemini and not GEMINI_CONFIGURED: raise HTTPException(status_code=400, detail="Gemini (transcription) not configured.")
-    if annot_provider == AnnotationModelProvider.gemini and not GEMINI_CONFIGURED: raise HTTPException(status_code=400, detail="Gemini (annotation) not configured.")
-    if annot_provider == AnnotationModelProvider.ollama and not OLLAMA_CONFIGURED:
-        raise HTTPException(status_code=400, detail=f"Ollama (annotation) not configured. Model: '{OLLAMA_MODEL_TO_USE or 'Not Set'}' at {OLLAMA_API_BASE_URL_ENV}.")
-
-    missing_local_models = [m for m, loaded in [("Age/Gender", age_gender_model), ("Emotion", emotion_model)] if not loaded]
-    if missing_local_models: logger.warning(f"Local models not loaded: {', '.join(missing_local_models)}. Predictions will be 'Unknown'.")
-
-    dir_path, output_jsonl_path = validate_paths(process_request.directory_path, process_request.output_jsonl_path)
-    audio_files = discover_audio_files(dir_path)
-    if not audio_files:
-        try: open(output_jsonl_path, "w").close(); return ProcessResponse(message="No audio files. Empty manifest created.", output_file=str(output_jsonl_path), processed_files=0, saved_records=0, errors=0)
-        except IOError as e: raise HTTPException(status_code=500, detail=f"Failed to create empty output: {e}")
-
-    processed, saved, errors_count = 0, 0, 0
-    try:
-        with open(output_jsonl_path, "w", encoding="utf-8") as outfile:
-            for audio_file in audio_files:
-                processed += 1
-                file_error_details: List[str] = []
-                duration_val, audio_data, sr = None, None, None
-                transcription_text, llm_annotated_text = None, None
-                
-                logger.info(f"--- Processing {audio_file.name} (Trans: {trans_model.value}, Annot: {annot_provider.value}) ---")
-                
-                try: # Main processing block for a single file
-                    duration_val = get_audio_duration(audio_file)
-                    audio_data, sr, load_err = load_audio(audio_file, TARGET_SAMPLE_RATE)
-                    if load_err: file_error_details.append(load_err)
-                    elif audio_data is None or sr != TARGET_SAMPLE_RATE: file_error_details.append("Audio load/SR mismatch.")
-
-                    # 1. Transcription
-                    if trans_model == TranscriptionModelChoice.whissle: transcription_text, trans_err = await transcribe_with_whissle_single(audio_file)
-                    else: transcription_text, trans_err = await transcribe_with_gemini_single(audio_file)
-                    if trans_err: file_error_details.append(f"Transcription: {trans_err}")
-                    elif transcription_text is None: file_error_details.append("Transcription returned None.")
-                    else: transcription_text = transcription_text.strip()
-
-                    # 2. Local A/G/E predictions
-                    age_pred_val, gender_idx_val, emotion_label_val = None, None, None
-                    if audio_data is not None and sr == TARGET_SAMPLE_RATE:
-                        if age_gender_model and emotion_model:
-                            try:
-                                age_pred_val, gender_idx_val, age_gender_err = await asyncio.to_thread(predict_age_gender, audio_data, TARGET_SAMPLE_RATE)
-                                if age_gender_err: file_error_details.append(f"A/G_WARN: {age_gender_err}")
-                                emotion_label_val, emotion_err = await asyncio.to_thread(predict_emotion, audio_data, TARGET_SAMPLE_RATE)
-                                if emotion_err: file_error_details.append(f"EMO_WARN: {emotion_err}")
-                            except Exception as pred_e: file_error_details.append(f"A/G/E Error: {pred_e}")
-                        else: file_error_details.append("Skipped A/G/E (local models not loaded).")
-                    elif not load_err: file_error_details.append("Skipped A/G/E (audio load issue).")
-                    
-                    age_gender_emotion_tags_for_llm = format_age_gender_emotion_tags_for_llm(age_pred_val, gender_idx_val, emotion_label_val)
-
-                    # 3. LLM Annotation
-                    if transcription_text is not None and transcription_text != "":
-                        text_to_llm = f"{transcription_text} {age_gender_emotion_tags_for_llm}".strip()
-                        llm_annotated_text, annot_err = await _annotate_text_llm_common(text_to_llm, annot_provider)
-                        if annot_err: file_error_details.append(f"ANNOTATION_FAIL ({annot_provider.value}): {annot_err}")
-                        # llm_annotated_text will contain the original text_to_llm if LLM failed, or the annotated version
-                    elif transcription_text == "":
-                        llm_annotated_text = f"[NO_SPEECH] {age_gender_emotion_tags_for_llm} INTENT_NO_SPEECH".strip()
-                    else: # Transcription failed
-                        llm_annotated_text = f"[TRANSCRIPTION_FAILED] {age_gender_emotion_tags_for_llm} INTENT_TRANSCRIPTION_FAILED".strip()
-                
-                except Exception as e: # Catch-all for unexpected errors during a file's processing
-                    logger.error(f"Unexpected critical error processing {audio_file.name}: {e}", exc_info=True)
-                    file_error_details.append(f"CRITICAL_ERROR: {type(e).__name__}: {e}")
-                    # Ensure llm_annotated_text is a string for parsing, even if it's just a placeholder
-                    if llm_annotated_text is None:
-                        age_gender_emotion_tags_for_llm_fallback = format_age_gender_emotion_tags_for_llm(None, None, None) # Default tags
-                        llm_annotated_text = f"[PROCESSING_ERROR] {age_gender_emotion_tags_for_llm_fallback} INTENT_PROCESSING_ERROR".strip()
-
-                # 4. Parse final fields for CustomAnnotatedJsonlRecord
-                parsed_output_fields = parse_custom_output_fields(llm_annotated_text)
-
-                # Get specific model names where available
-                transcription_model_name = trans_model.value
-                annotation_model_name = annot_provider.value
-                
-                # If Ollama, include the specific model name
-                if annot_provider == AnnotationModelProvider.ollama and OLLAMA_MODEL_TO_USE:
-                    annotation_model_name = f"{annotation_model_name}:{OLLAMA_MODEL_TO_USE}"
-                
-                custom_record = CustomAnnotatedJsonlRecord(
-                    audio_filepath=str(audio_file.resolve()),
-                    text=parsed_output_fields["text_with_entities"],
-                    duration=round(duration_val, 2) if duration_val is not None else None,
-                    task_name=parsed_output_fields["task_name"],
-                    gender=parsed_output_fields["gender"],
-                    age_group=parsed_output_fields["age_group"],
-                    emotion=parsed_output_fields["emotion"],
-                    transcription_model=transcription_model_name,
-                    annotation_model=annotation_model_name
-                )
-                
-                try:
-                    outfile.write(custom_record.model_dump_json(exclude_none=True) + "\n")
-                    if not file_error_details: # Only count as saved if no processing errors occurred for this file
-                        saved += 1
-                    else: # If there were processing errors, count it as an error, even if written
-                        errors_count +=1
-                        logger.warning(f"File {audio_file.name} processed with errors: {'; '.join(file_error_details)}")
+                record = TranscriptionJsonlRecord(audio_filepath=str(audio_file.resolve()), text=transcription_text, duration=duration, model_used_for_transcription=model_choice.value, error=file_error)
+                try: 
+                    outfile.write(record.model_dump_json(exclude_none=True) + "\n")
                 except Exception as write_e:
                     logger.error(f"Failed to write record for {audio_file.name}: {write_e}", exc_info=True)
-                    errors_count +=1 # Count write error
-                
-                del audio_data; gc.collect()
-                if torch.cuda.is_available(): torch.cuda.empty_cache()
-        
-        logger.info(f"Finished full annotation. Processed {processed} files.")
-    except IOError as e: raise HTTPException(status_code=500, detail=f"Failed to write output file: {e}")
+                    if not file_error: 
+                        file_error = f"JSONL write error: {write_e}"
+                    else: 
+                        file_error += f"; JSONL write error: {write_e}"
+                if file_error: 
+                    error_count += 1
+                else: 
+                    saved_records_count += 1
+                gc.collect()
+    except IOError as e: 
+        raise HTTPException(status_code=500, detail=f"Failed to write output file: {e}")
 
-    final_message = (
-        f"Processed {processed}/{len(audio_files)} files. "
-        f"Successfully saved records (no processing errors): {saved}. "
-        f"Files with processing/write errors: {errors_count}."
-    )
-    return ProcessResponse(message=final_message, output_file=str(output_jsonl_path), processed_files=processed, saved_records=saved, errors=errors_count)
+    msg = f"Processed {processed_files_count}/{len(audio_files)}. Saved: {saved_records_count}. Errors: {error_count}."
+    return ProcessResponse(message=msg, output_file=str(output_jsonl_path), processed_files=processed_files_count, saved_records=saved_records_count, errors=error_count)
+
+
+@app.post("/create_annotated_manifest/", response_model=ProcessResponse, summary="Create Annotated Manifest")
+async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
+    model_choice = process_request.model_choice
+    if model_choice == ModelChoice.whissle and not WHISSLE_CONFIGURED:
+        raise HTTPException(status_code=400, detail="Whissle not configured.")
+    # Check if Gemini is required for entity/intent and configured
+    requires_gemini_for_annotation = process_request.annotations and any(a in ["entity", "intent"] for a in process_request.annotations)
+    if requires_gemini_for_annotation and not GEMINI_CONFIGURED:
+        raise HTTPException(status_code=400, detail="Gemini not configured (required for entity/intent annotation).")
+
+    # Check if Age/Gender/Emotion models are needed and loaded
+    needs_age_gender = process_request.annotations and any(a in ["age", "gender"] for a in process_request.annotations)
+    needs_emotion = process_request.annotations and "emotion" in process_request.annotations
+
+    dir_path, output_jsonl_path = validate_paths(process_request.directory_path, process_request.output_jsonl_path)
+    audio_files = discover_audio_files(dir_path)
+
+    if not audio_files:
+        try:
+            with open(output_jsonl_path, "w", encoding="utf-8") as _:
+                pass
+        except IOError as e:
+            raise HTTPException(status_code=500, detail=f"Failed to create empty output file: {e}")
+        return ProcessResponse(
+            message="No audio files. Empty manifest created.",
+            output_file=str(output_jsonl_path),
+            processed_files=0,
+            saved_records=0,
+            errors=0
+        )
+
+    processed_files_count = 0
+    saved_records_count = 0
+    error_count = 0
+
+    try:
+        with open(output_jsonl_path, "w", encoding="utf-8") as outfile:
+         for audio_file in audio_files:
+            file_error_details: List[str] = []
+            
+            # Initialize data for the record
+            record_data: Dict[str, Any] = {
+                "audio_filepath": str(audio_file.resolve()),
+                "task_name": "NER", # Set task name to "NER" as requested
+            }
+
+            logger.info(f"--- Processing {audio_file.name} (Selective Annotation) ---")
+            processed_files_count += 1
+
+            # 1. Get Duration
+            record_data["duration"] = get_audio_duration(audio_file)
+
+            # 2. Load Audio for A/G/E if requested
+            audio_data: Optional[np.ndarray] = None
+            sample_rate: Optional[int] = None
+            if needs_age_gender or needs_emotion:
+                audio_data, sample_rate, load_err = load_audio(audio_file, TARGET_SAMPLE_RATE)
+                if load_err:
+                    file_error_details.append(load_err)
+                elif audio_data is None or sample_rate != TARGET_SAMPLE_RATE:
+                    file_error_details.append("Audio load/SR mismatch for A/G/E.")
+            
+            # 3. Transcribe Audio
+            transcription_text: Optional[str] = None
+            transcription_error: Optional[str] = None
+            if model_choice == ModelChoice.whissle:
+                transcription_text, transcription_error = await transcribe_with_whissle_single(audio_file)
+            elif model_choice == ModelChoice.gemini:
+                transcription_text, transcription_error = await transcribe_with_gemini_single(audio_file)
+            else: # Deepgram
+                transcription_text, transcription_error = await transcribe_with_deepgram_single(audio_file)
+            
+            if transcription_error:
+                file_error_details.append(f"Transcription: {transcription_error}")
+                transcription_text = None # Mark as failed if error
+            elif transcription_text is None:
+                file_error_details.append("Transcription returned None.")
+            
+            # Store both original transcription and processed text
+            record_data["original_transcription"] = transcription_text
+            record_data["text"] = transcription_text  # For now, same as original; can be processed later
+
+            # 4. Predict Age/Gender/Emotion if requested
+            if (needs_age_gender or needs_emotion) and audio_data is not None and sample_rate == TARGET_SAMPLE_RATE:
+                tasks = []
+                if needs_age_gender:
+                    if age_gender_model is None: file_error_details.append("A/G_WARN: Age/Gender model not loaded.")
+                    else: tasks.append(asyncio.to_thread(predict_age_gender, audio_data, TARGET_SAMPLE_RATE))
+                if needs_emotion:
+                    if emotion_model is None: file_error_details.append("EMO_WARN: Emotion model not loaded.")
+                    else: tasks.append(asyncio.to_thread(predict_emotion, audio_data, TARGET_SAMPLE_RATE))
+                
+                if tasks: # Only run gather if there are tasks
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    for result in results:
+                        if isinstance(result, tuple) and len(result) == 3:  # Age/Gender result (age_pred, gender_idx, error)
+                            age_pred, gender_idx, age_gender_err = result
+                            if age_gender_err: file_error_details.append(f"A/G_WARN: {age_gender_err}")
+                            else:
+                                if "age" in process_request.annotations:
+                                    try:
+                                        actual_age = round(age_pred, 1)
+                                        age_brackets: List[Tuple[float, str]] = [
+                                            (18, "0-17"), (25, "18-24"), (35, "25-34"),
+                                            (45, "35-44"), (55, "45-54"), (65, "55-64"),
+                                            (float('inf'), "65+")
+                                        ]
+                                        age_group = "Unknown"
+                                        for threshold, bracket in age_brackets:
+                                            if actual_age < threshold:
+                                                age_group = bracket
+                                                break
+                                        record_data["age_group"] = age_group
+                                    except Exception as age_e:
+                                        logger.error(f"Error formatting age_group: {age_e}")
+                                        record_data["age_group"] = "Error"
+
+                                if "gender" in process_request.annotations:
+                                    gender_str = "Unknown"
+                                    if gender_idx == 1: gender_str = "Male"
+                                    elif gender_idx == 0: gender_str = "Female"
+                                    record_data["gender"] = gender_str
+                        elif isinstance(result, tuple) and len(result) == 2:  # Emotion result (emotion_label, error)
+                            emotion_label, emotion_err = result
+                            if emotion_err: file_error_details.append(f"EMO_WARN: {emotion_err}")
+                            else:
+                                if "emotion" in process_request.annotations:
+                                    record_data["emotion"] = emotion_label.replace("_", " ").title() if emotion_label != "SHORT_AUDIO" else "Short Audio"
+                                
+            # 5. Annotate Entities/Intent with Gemini if requested and transcription exists
+            if requires_gemini_for_annotation and transcription_text and transcription_text.strip() != "":
+                tokens, tags, intent, gemini_anno_err = await annotate_text_structured_with_gemini(transcription_text)
+                if gemini_anno_err:
+                    file_error_details.append(f"GEMINI_ANNOTATION_FAIL: {gemini_anno_err}")
+                    if "intent" in process_request.annotations: record_data["gemini_intent"] = "ANNOTATION_FAILED"
+                else:
+                    if "entity" in process_request.annotations: record_data["bio_annotation_gemini"] = BioAnnotation(tokens=tokens, tags=tags)
+                    if "intent" in process_request.annotations: record_data["gemini_intent"] = intent # intent is already uppercase from the function
+            elif requires_gemini_for_annotation: # If annotation requested but transcription is empty/failed
+                if transcription_text == "":
+                    if "intent" in process_request.annotations: record_data["gemini_intent"] = "NO_SPEECH"
+                else: # transcription_text is None (transcription failed)
+                    if "intent" in process_request.annotations: record_data["gemini_intent"] = "TRANSCRIPTION_FAILED"
+
+
+            # Set final error message
+            final_error_msg = "; ".join(file_error_details) if file_error_details else None
+            record_data["error"] = final_error_msg
+
+            # Create Pydantic record and write to file
+            current_errors_before_write = error_count
+            try:
+                record = AnnotatedJsonlRecord(**record_data)
+                outfile.write(record.model_dump_json(exclude_none=True) + "\n")
+            except Exception as write_e:
+                logger.error(f"Failed to write annotated record for {audio_file.name}: {write_e}", exc_info=True)
+                if not final_error_msg: # If the error was *only* during write
+                    final_error_msg = f"JSONL write error: {write_e}"
+                if error_count == current_errors_before_write: # Ensure it's counted once
+                     error_count += 1
+            
+            # Determine if record was truly successful (no processing errors, no write errors)
+            if not final_error_msg:
+                saved_records_count += 1
+            elif error_count == current_errors_before_write and final_error_msg: # If processing errors caused error_count to increment already
+                error_count += 1
+
+            # Clean up GPU memory
+            del audio_data
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        truly_successful_saves = saved_records_count # Renamed from previous calculation
+        final_message = (
+            f"Processed {processed_files_count}/{len(audio_files)} files for selective annotation. "
+            f"{truly_successful_saves} records successfully saved (no internal errors). "
+            f"{error_count} files encountered errors or warnings (check 'error' field in JSONL)."
+        )
+        return ProcessResponse(
+            message=final_message,
+            output_file=str(output_jsonl_path),
+            processed_files=processed_files_count,
+            saved_records=truly_successful_saves,
+            errors=error_count
+        )
+    except IOError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write output file: {e}")
+
 
 @app.get("/status", summary="API Status")
 async def get_status():
     return {
-        "message": "Welcome to the Audio Processing API v1.6.0",
+        "message": "Welcome to the Audio Processing API v1.5.0",
         "docs_url": "/docs", "html_interface": "/",
         "endpoints": { "transcription_only": "/create_transcription_manifest/", "full_annotation": "/create_annotated_manifest/" },
-        "transcription_models": { 
-            "gemini_configured": GEMINI_CONFIGURED, 
-            "gemini_model": "gemini-1.5-flash" if GEMINI_CONFIGURED else "N/A",
-            "whissle_available": WHISSLE_AVAILABLE, 
-            "whissle_configured": WHISSLE_CONFIGURED,
-            "whissle_model": "en-US-0.6b" if WHISSLE_CONFIGURED else "N/A"
-        },
-        "annotation_providers": { 
-            "gemini_configured": GEMINI_CONFIGURED, 
-            "gemini_model": "gemini-1.5-pro-latest" if GEMINI_CONFIGURED else "N/A",
-            "ollama_sdk_available": OLLAMA_SDK_AVAILABLE, 
-            "ollama_configured": OLLAMA_CONFIGURED, 
-            "ollama_model_used": OLLAMA_MODEL_TO_USE if OLLAMA_CONFIGURED else "N/A", 
-            "ollama_api_base_url": OLLAMA_API_BASE_URL_ENV
-        },
-        "local_prediction_models": { 
-            "age_gender_model_loaded": age_gender_model is not None, 
-            "age_gender_model_name": "audeering/wav2vec2-large-robust-6-ft-age-gender" if age_gender_model is not None else "N/A",
-            "emotion_model_loaded": emotion_model is not None,
-            "emotion_model_name": "superb/hubert-large-superb-er" if emotion_model is not None else "N/A"
-        },
-        "compute_device": str(device)
+        "gemini_configured": GEMINI_CONFIGURED, "whissle_available": WHISSLE_AVAILABLE, "whissle_configured": WHISSLE_CONFIGURED,
+        "age_gender_model_loaded": age_gender_model is not None, "emotion_model_loaded": emotion_model is not None,
+        "device": str(device)
     }
+
 
 if __name__ == "__main__":
     script_dir = Path(__file__).parent.resolve()
     fastapi_script_name = Path(__file__).stem
     app_module_string = f"{fastapi_script_name}:app"
-    host, port, reload_flag = os.getenv("HOST", "127.0.0.1"), int(os.getenv("PORT", "8000")), os.getenv("RELOAD", "true").lower() == "true"
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "8000"))
+    reload = os.getenv("RELOAD", "true").lower() == "true"
     log_level = "info"
-    logger.info(f"Starting FastAPI server for '{app_module_string}' on {host}:{port} (Reload: {reload_flag}, Log: {log_level.upper()})")
+    logger.info(f"Starting FastAPI server for '{app_module_string}' on {host}:{port}...")
+    logger.info(f"Log Level: {log_level.upper()}, Reload Mode: {'Enabled' if reload else 'Disabled'}")
     logger.info(f"Docs: http://{host}:{port}/docs, UI: http://{host}:{port}/")
-    uvicorn.run(app_module_string, host=host, port=port, reload=reload_flag, reload_dirs=[str(script_dir)] if reload_flag else None, log_level=log_level)
+    uvicorn.run(app_module_string, host=host, port=port, reload=reload, reload_dirs=[str(script_dir)] if reload else None, log_level=log_level)

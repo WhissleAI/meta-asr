@@ -63,14 +63,6 @@
         </div>
 
         <div class="form-group">
-            <label for="annotation_provider">Annotation Provider (used if creating annotated manifest):</label>
-            <select id="annotation_provider" name="annotation_provider" required>
-                <option value="gemini">Gemini</option>
-                <option value="ollama">Ollama</option>
-            </select>
-        </div>
-
-        <div class="form-group">
             <label for="output_jsonl_path">Output Manifest Path (.jsonl):</label>
             <input type="text" id="output_jsonl_path" name="output_jsonl_path" required placeholder="/path/to/output/manifest.jsonl">
         </div>
@@ -105,7 +97,7 @@
 
             const data = {
                 directory_path: dirPath,
-                model_choice: formData.get('model_choice'), // This will be used as transcription_model_choice by the backend
+                model_choice: formData.get('model_choice'),
                 output_jsonl_path: outputPath
             };
 
@@ -115,7 +107,6 @@
                 statusDiv.innerHTML = '<p class="loading">Starting transcription-only manifest creation...</p>';
             } else if (type === 'annotation') {
                 endpoint = '/create_annotated_manifest/';
-                data.annotation_provider = formData.get('annotation_provider'); // Add annotation_provider for annotation
                 statusDiv.innerHTML = '<p class="loading">Starting full annotation manifest creation...</p>';
             } else {
                 statusDiv.innerHTML = '<p class="error">Error: Invalid processing type.</p>';

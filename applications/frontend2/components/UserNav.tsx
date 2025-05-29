@@ -1,12 +1,20 @@
 'use client';
 
-import { useState } from 'react';
 import {
     Avatar,
     AvatarFallback,
     AvatarImage,
 } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+    Dialog,
+    DialogClose,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle
+} from "@/components/ui/dialog";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -16,17 +24,9 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-    DialogFooter,
-    DialogClose
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import { signOut, useSession } from "next-auth/react";
+import { useState } from 'react';
+import SettingsDialog from './dialogs/Settings';
 
 export const UserNav = () => {
     const { data: session } = useSession();
@@ -118,38 +118,7 @@ export const UserNav = () => {
             </Dialog>
 
             {/* Settings Dialog */}
-            <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-                <DialogContent className="sm:max-w-[425px]">
-                    <DialogHeader>
-                        <DialogTitle>Settings</DialogTitle>
-                        <DialogDescription>
-                            Manage your application settings here.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                        <p className="text-sm text-muted-foreground">Dummy settings content. More options will be available soon.</p>
-                        {/* Example Setting */}
-                        <div className="flex items-center justify-between">
-                            <Label htmlFor="dark-mode" className="flex flex-col space-y-1">
-                                <span>Dark Mode</span>
-                                <span className="font-normal leading-snug text-muted-foreground">
-                                    Toggle dark mode for the application.
-                                </span>
-                            </Label>
-                            {/* Switch component would go here if added */}
-                            <Button variant="outline" size="sm" disabled>Toggle (soon)</Button>
-                        </div>
-                    </div>
-                    <DialogFooter>
-                        <DialogClose asChild>
-                            <Button type="button" variant="secondary">
-                                Close
-                            </Button>
-                        </DialogClose>
-                        <Button type="submit" disabled>Save changes (soon)</Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            <SettingsDialog isSettingsOpen={isSettingsOpen} setIsSettingsOpen={setIsSettingsOpen} />
         </>
     );
 }

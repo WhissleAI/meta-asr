@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 from typing import Optional, Tuple
 from .config import (
-    WHISSLE_CONFIGURED, GEMINI_CONFIGURED, DEEPGRAM_CONFIGURED,
-    WHISSLE_AUTH_TOKEN, DEEPGRAM_API_KEY
+    is_whissle_configured, is_gemini_configured, is_deepgram_configured, # Use getter functions
+    WHISSLE_AUTH_TOKEN, DEEPGRAM_API_KEY # These should be fine as they are from os.getenv in config
 )
 
 logger = logging.getLogger(__name__)
@@ -28,20 +28,24 @@ except ImportError:
     logger.warning("Warning: Google GenerativeAI not available")
     GENAI_AVAILABLE = False
 
+# Remove global DEEPGRAM_CLIENT initialization from here
 try:
     from deepgram import DeepgramClient, PrerecordedOptions
-    if DEEPGRAM_CONFIGURED:
-        DEEPGRAM_CLIENT = DeepgramClient(DEEPGRAM_API_KEY)
     DEEPGRAM_AVAILABLE = True
 except ImportError:
     logger.warning("Warning: Deepgram SDK not available")
     DEEPGRAM_AVAILABLE = False
+    class DeepgramClient: pass # Dummy
+    class PrerecordedOptions: pass # Dummy
 
 async def transcribe_with_whissle_single(audio_path: Path, model_name="en-US-0.6b") -> Tuple[Optional[str], Optional[str]]:
     """Transcribe audio using Whissle"""
-    if not WHISSLE_CONFIGURED:
+    if not is_whissle_configured(): # Use getter
         return None, "Whissle is not configured."
+    if not WHISSLE_AVAILABLE:
+        return None, "Whissle SDK not available."
     try:
+        # Initialize client inside the function
         whissle_client = WhissleClient(auth_token=WHISSLE_AUTH_TOKEN)
         response = await whissle_client.speech_to_text(str(audio_path), model_name=model_name)
         if isinstance(response, dict):
@@ -72,8 +76,10 @@ def get_mime_type(audio_file_path: Path) -> str:
 
 async def transcribe_with_gemini_single(audio_path: Path) -> Tuple[Optional[str], Optional[str]]:
     """Transcribe audio using Gemini"""
-    if not GEMINI_CONFIGURED:
+    if not is_gemini_configured(): # Use getter
         return None, "Gemini API is not configured."
+    if not GENAI_AVAILABLE:
+        return None, "Google GenerativeAI SDK not available."
     
     model_name = "models/gemini-1.5-flash"  # Or "models/gemini-1.5-pro" for higher quality potential
     try:
@@ -140,9 +146,13 @@ async def transcribe_with_gemini_single(audio_path: Path) -> Tuple[Optional[str]
 
 async def transcribe_with_deepgram_single(audio_path: Path) -> Tuple[Optional[str], Optional[str]]:
     """Transcribe audio using Deepgram"""
-    if not DEEPGRAM_CONFIGURED:
+    if not is_deepgram_configured(): # Use getter
         return None, "Deepgram not configured."
+    if not DEEPGRAM_AVAILABLE:
+        return None, "Deepgram SDK not available."
     try:
+        # Initialize client inside the function
+        deepgram_client = DeepgramClient(DEEPGRAM_API_KEY)
         with open(audio_path, "rb") as audio_file:
             buffer_data = audio_file.read()
         options = PrerecordedOptions(
@@ -151,9 +161,8 @@ async def transcribe_with_deepgram_single(audio_path: Path) -> Tuple[Optional[st
             diarize=False,
             language="en"
         )
-        # Run synchronous Deepgram call in a thread to avoid blocking
         response = await asyncio.to_thread(
-            DEEPGRAM_CLIENT.listen.prerecorded.v("1").transcribe_file,
+            deepgram_client.listen.prerecorded.v("1").transcribe_file,
             {"buffer": buffer_data, "mimetype": get_mime_type(audio_path)},
             options
         )

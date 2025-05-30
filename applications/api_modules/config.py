@@ -5,16 +5,12 @@ import os
 import torch
 import logging
 from pathlib import Path
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(module)s - %(funcName)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Constants and Globals ---
+# These will be set based on environment variables, assumed to be loaded by main.py
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 WHISSLE_AUTH_TOKEN = os.getenv("WHISSLE_AUTH_TOKEN")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
@@ -56,43 +52,94 @@ logger.info(f"Using device: {device}")
 
 # Configuration setup
 def setup_api_configurations():
-    """Setup API configurations for external services"""
+    """Setup API configurations for external services. Relies on .env being loaded by main.py."""
     global GEMINI_CONFIGURED, WHISSLE_CONFIGURED, DEEPGRAM_CONFIGURED
     
+    # Environment variables are now expected to be pre-loaded by main.py
+    # The print statements below will show what os.getenv() retrieves at this point.
+    # print(f"[SETUP_API_CONFIG_PRINT] In setup_api_configurations. config.py does not load .env anymore.")
+    
+    # Retrieve keys directly from environment
+    google_api_key_local = os.getenv("GOOGLE_API_KEY")
+    whissle_auth_token_local = os.getenv("WHISSLE_AUTH_TOKEN")
+    deepgram_api_key_local = os.getenv("DEEPGRAM_API_KEY")
+
+    # Debug prints for values retrieved by os.getenv within this function
+    print(f"[SETUP_API_CONFIG_PRINT] Values from os.getenv inside setup_api_configurations:")
+    print(f"[SETUP_API_CONFIG_PRINT] google_api_key_local is {'SET' if google_api_key_local else 'NOT SET'}")
+    print(f"[SETUP_API_CONFIG_PRINT] whissle_auth_token_local is {'SET' if whissle_auth_token_local else 'NOT SET'}")
+    print(f"[SETUP_API_CONFIG_PRINT] deepgram_api_key_local is {'SET' if deepgram_api_key_local else 'NOT SET'}")
+    
+    # Original debug logging using logger
+    logger.info(f"DEBUG: setup_api_configurations called")
+    logger.info(f"DEBUG: GOOGLE_API_KEY (from local var in func) found: {bool(google_api_key_local)}")
+    logger.info(f"DEBUG: WHISSLE_AUTH_TOKEN (from local var in func) found: {bool(whissle_auth_token_local)}")
+    logger.info(f"DEBUG: DEEPGRAM_API_KEY (from local var in func) found: {bool(deepgram_api_key_local)}")
+    
     # Gemini configuration
-    if GOOGLE_API_KEY:
+    if google_api_key_local:
         try:
             import google.generativeai as genai
-            genai.configure(api_key=GOOGLE_API_KEY)
+            genai.configure(api_key=google_api_key_local)
             logger.info("Gemini API configured successfully.")
             GEMINI_CONFIGURED = True
         except Exception as e:
             logger.error(f"Error configuring Gemini API: {e}. Gemini features will be unavailable.")
+            GEMINI_CONFIGURED = False # Ensure it's false on error
     else:
         logger.warning("Warning: GOOGLE_API_KEY environment variable not set. Gemini features will be unavailable.")
+        GEMINI_CONFIGURED = False
 
     # Whissle configuration
+    # WHISSLE_AVAILABLE = False # Initialize
     try:
-        from whissle import WhissleClient
-        WHISSLE_AVAILABLE = True
-        if WHISSLE_AUTH_TOKEN:
+        from whissle import WhissleClient # Keep import to check availability
+        # WHISSLE_AVAILABLE = True # SDK is present
+        if whissle_auth_token_local:
             logger.info("Whissle Auth Token found.")
             WHISSLE_CONFIGURED = True
         else:
             logger.warning("Warning: WHISSLE_AUTH_TOKEN environment variable not set. Whissle model will be unavailable.")
+            WHISSLE_CONFIGURED = False
     except ImportError:
         logger.warning("Warning: WhissleClient SDK not found or failed to import. Whissle model will be unavailable.")
-        WHISSLE_AVAILABLE = False
+        # WHISSLE_AVAILABLE = False
+        WHISSLE_CONFIGURED = False
 
     # Deepgram configuration
-    DEEPGRAM_CONFIGURED = bool(DEEPGRAM_API_KEY)
-    if DEEPGRAM_CONFIGURED:
+    if deepgram_api_key_local:
         try:
             from deepgram import DeepgramClient
-            DEEPGRAM_CLIENT = DeepgramClient(DEEPGRAM_API_KEY)
-            logger.info("Deepgram client initialized successfully.")
-        except Exception as e:
-            logger.error(f"Failed to initialize Deepgram client: {e}")
+            # DEEPGRAM_CLIENT = DeepgramClient(deepgram_api_key_local) # Initialize if needed globally, or locally in transcription module
+            logger.info("Deepgram API key found. Client can be initialized.")
+            DEEPGRAM_CONFIGURED = True
+        except Exception as e: # Should be ImportError for DeepgramClient if SDK missing, or other errors for bad key
+            logger.error(f"Failed to prepare for Deepgram client initialization (or SDK missing): {e}")
             DEEPGRAM_CONFIGURED = False
     else:
         logger.warning("Deepgram API key not set. Deepgram transcription disabled.")
+        DEEPGRAM_CONFIGURED = False
+    
+    # Final status log
+    logger.info(f"DEBUG: Configuration complete - Gemini: {GEMINI_CONFIGURED}, Whissle: {WHISSLE_CONFIGURED}, Deepgram: {DEEPGRAM_CONFIGURED}")
+
+# Getter functions for configuration status
+def is_gemini_configured():
+    """Check if Gemini is configured"""
+    return GEMINI_CONFIGURED
+
+def is_whissle_configured():
+    """Check if Whissle is configured"""
+    return WHISSLE_CONFIGURED
+
+def is_deepgram_configured():
+    """Check if Deepgram is configured"""
+    return DEEPGRAM_CONFIGURED
+
+def get_api_configurations():
+    """Get all API configuration statuses"""
+    return {
+        "gemini_configured": GEMINI_CONFIGURED,
+        "whissle_configured": WHISSLE_CONFIGURED,
+        "deepgram_configured": DEEPGRAM_CONFIGURED
+    }

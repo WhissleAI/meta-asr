@@ -110,7 +110,7 @@ This will create the necessary tables in your database based on the `prisma/sche
 If you are setting up the project from scratch and Shadcn UI is not yet configured, run:
 
 ```bash
-npx shadcn-ui@latest init
+npx shadcn@latest init
 ```
 
 Follow the prompts. The typical configuration used in this project is:

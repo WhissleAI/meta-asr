@@ -7,7 +7,7 @@ import torch
 import asyncio
 from typing import Dict, Any, List, Tuple
 import numpy as np
-from applications.config import (
+from config import (
     ProcessRequest, ProcessResponse, 
     TranscriptionJsonlRecord, AnnotatedJsonlRecord, 
     logger, device, 
@@ -15,15 +15,15 @@ from applications.config import (
     TARGET_SAMPLE_RATE, 
     BioAnnotation 
 )
-from applications.models import (
+from models import (
     GEMINI_CONFIGURED, WHISSLE_CONFIGURED, DEEPGRAM_CONFIGURED, 
     age_gender_model, age_gender_processor, 
     emotion_model, emotion_feature_extractor,
     WHISSLE_AVAILABLE
 )
-from applications.audio_utils import validate_paths, discover_audio_files, load_audio, get_audio_duration
-from applications.transcription import transcribe_with_whissle_single, transcribe_with_gemini_single, transcribe_with_deepgram_single
-from applications.annotation import annotate_text_structured_with_gemini
+from audio_utils import validate_paths, discover_audio_files, load_audio, get_audio_duration
+from transcription import transcribe_with_whissle_single, transcribe_with_gemini_single, transcribe_with_deepgram_single
+from annotation import annotate_text_structured_with_gemini
 
 router = APIRouter()
 

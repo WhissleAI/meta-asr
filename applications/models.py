@@ -7,7 +7,7 @@ from transformers import (
 import torch.nn as nn
 import google.generativeai as genai
 from deepgram import DeepgramClient
-from applications.config import logger, GOOGLE_API_KEY, DEEPGRAM_API_KEY, WHISSLE_AUTH_TOKEN, device
+from config import logger, GOOGLE_API_KEY, DEEPGRAM_API_KEY, WHISSLE_AUTH_TOKEN, device
 
 # Globals for model availability
 GEMINI_CONFIGURED = False

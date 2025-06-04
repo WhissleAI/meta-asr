@@ -2,8 +2,8 @@
 from pathlib import Path
 import asyncio
 from typing import Tuple, Optional
-from applications.config import logger, WHISSLE_AUTH_TOKEN
-from applications.models import GEMINI_CONFIGURED, WHISSLE_CONFIGURED, DEEPGRAM_CONFIGURED, DEEPGRAM_CLIENT
+from config import logger, WHISSLE_AUTH_TOKEN
+from models import GEMINI_CONFIGURED, WHISSLE_CONFIGURED, DEEPGRAM_CONFIGURED, DEEPGRAM_CLIENT
 import google.generativeai as genai
 from deepgram import PrerecordedOptions
 

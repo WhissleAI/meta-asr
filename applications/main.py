@@ -6,9 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import uvicorn
 import os
-from applications.config import logger
-from applications.routes import router
-from fastApi import HTTPException
+from config import logger
+from routes import router
+from fastapi import HTTPException
+
 
 # Initialize FastAPI app
 app = FastAPI(

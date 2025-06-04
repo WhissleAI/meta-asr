@@ -4,7 +4,7 @@ import numpy as np
 import soundfile as sf
 import librosa
 import resampy
-from applications.config import AUDIO_EXTENSIONS, TARGET_SAMPLE_RATE, logger
+from config import AUDIO_EXTENSIONS, TARGET_SAMPLE_RATE, logger
 from typing import Tuple, Optional, List
 from fastapi import HTTPException
 

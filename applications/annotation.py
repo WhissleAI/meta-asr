@@ -2,33 +2,78 @@
 import json
 import asyncio
 from typing import Tuple, Optional, List
-from applications.config import logger, ENTITY_TYPES, INTENT_TYPES
-from applications.models import GEMINI_CONFIGURED
+from config import logger, ENTITY_TYPES, INTENT_TYPES
+from models import GEMINI_CONFIGURED
 import google.generativeai as genai
 
+# def get_annotation_prompt(texts_to_annotate: List[str]) -> str:
+#     all_entity_types_str = ", ".join(ENTITY_TYPES)
+#     all_intent_types_str = ", ".join(INTENT_TYPES)
+#     return f'''You are an expert linguistic annotator for English text.
+# You will receive a list of English sentences. Each sentence is a raw lowercase transcription.
+
+# Your task is crucial and requires precision. For each sentence, you must:
+# 1.  **TOKENIZE:** Split the sentence into individual words (tokens).
+# 2.  **ASSIGN BIO TAGS:** For each token, assign exactly one BIO tag according to the following rules:
+#     *   **ENTITY TAGS (Priority):** Identify entities using the provided `ENTITY_TYPES` list.
+#         *   `B-<ENTITY_TYPE>` for the *beginning* of an entity phrase (e.g., `B-PERSON_NAME`).
+#         *   `I-<ENTITY_TYPE>` for *inside* an entity phrase (e.g., `I-PERSON_NAME`).
+#     *   **UTTERANCE INTENT TAGS (Default/Fallback):** If a token is *not* part of any specific entity, it should be tagged to reflect the overall intent of the utterance.
+#         *   The first token of the sentence (if not an entity) should be `B-<UTTERANCE_INTENT>`.
+#         *   Subsequent non-entity tokens should be `I-<UTTERANCE_INTENT>`.
+#         *   The `<UTTERANCE_INTENT>` should be chosen from the `INTENT_TYPES` list.
+#     *   **IMPORTANT:** Ensure every token has a tag. If no specific entity or clear intent can be assigned, use `O` (Outside) for tokens.
+# 3.  **EXTRACT INTENT:** In addition to tagging, determine and provide the single overall `intent` of the utterance as a separate field. This `intent` should be one of the `INTENT_TYPES`.
+# 4.  **OUTPUT FORMAT (CRITICAL):** Return a JSON array of objects. Each object in the array must contain:
+#     *   `text`: The original lowercase input sentence (for verification purposes).
+#     *   `tokens`: A JSON array of the tokenized words.
+#     *   `tags`: A JSON array of the BIO tags, corresponding one-to-one with the `tokens` array.
+#     *   `intent`: A single string representing the overall utterance intent.
+
+# **ENTITY TYPES LIST (USE ONLY THESE FOR ENTITY TAGS):**
+# {json.dumps(ENTITY_TYPES, ensure_ascii=False, indent=2)}
+
+# **INTENT TYPES LIST (USE ONE FOR UTTERANCE INTENT AND FOR DEFAULT TAGS):**
+# {json.dumps(INTENT_TYPES, ensure_ascii=False, indent=2)}
+
+# **Example Input String 1 (with entities):**
+# "then if he becomes a champion, he's entitled to more money after that and champion end"
+
+# **CORRECT Example Output 1 (assuming intent is INFORM and "champion" is a PROJECT_NAME):**
+# ```json
+# [
+#   {{
+#     "text": "then if he becomes a champion, he's entitled to more money after that and champion end",
+#     "tokens": ["then", "if", "he", "becomes", "a", "champion", ",", "he's", "entitled", "to", "more", "money", "after", "that", "and", "champion", "end"],
+#     "tags": ["B-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "B-PROJECT_NAME", "O", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "I-INFORM", "B-PROJECT_NAME", "O"],
+#     "intent": "INFORM"
+#   }}
+# ]
+
+# changes to the input string will be reflected in the `Sentences to Annotate Now` section below. 
 def get_annotation_prompt(texts_to_annotate: List[str]) -> str:
     all_entity_types_str = ", ".join(ENTITY_TYPES)
     all_intent_types_str = ", ".join(INTENT_TYPES)
     return f'''You are an expert linguistic annotator for English text.
-You will receive a list of English sentences. Each sentence is a raw lowercase transcription.
+You will receive a list of English sentences, which may include multiple sentences in a single string. Each input is a raw lowercase transcription.
 
-Your task is crucial and requires precision. For each sentence, you must:
-1.  **TOKENIZE:** Split the sentence into individual words (tokens).
-2.  **ASSIGN BIO TAGS:** For each token, assign exactly one BIO tag according to the following rules:
+Your task is crucial and requires precision. For each input string, you must:
+1.  **TOKENIZE:** Split the input into individual words and punctuation (tokens), preserving all elements (e.g., words, commas, periods).
+2.  **ASSIGN BIO TAGS:** For each token, assign exactly one BIO tag:
     *   **ENTITY TAGS (Priority):** Identify entities using the provided `ENTITY_TYPES` list.
         *   `B-<ENTITY_TYPE>` for the *beginning* of an entity phrase (e.g., `B-PERSON_NAME`).
         *   `I-<ENTITY_TYPE>` for *inside* an entity phrase (e.g., `I-PERSON_NAME`).
-    *   **UTTERANCE INTENT TAGS (Default/Fallback):** If a token is *not* part of any specific entity, it should be tagged to reflect the overall intent of the utterance.
-        *   The first token of the sentence (if not an entity) should be `B-<UTTERANCE_INTENT>`.
+    *   **UTTERANCE INTENT TAGS (Default/Fallback):** If a token is *not* part of any specific entity, tag it to reflect the overall intent.
+        *   The first non-entity token of the input should be `B-<UTTERANCE_INTENT>`.
         *   Subsequent non-entity tokens should be `I-<UTTERANCE_INTENT>`.
-        *   The `<UTTERANCE_INTENT>` should be chosen from the `INTENT_TYPES` list.
-    *   **IMPORTANT:** Ensure every token has a tag. If no specific entity or clear intent can be assigned, use `O` (Outside) for tokens.
-3.  **EXTRACT INTENT:** In addition to tagging, determine and provide the single overall `intent` of the utterance as a separate field. This `intent` should be one of the `INTENT_TYPES`.
-4.  **OUTPUT FORMAT (CRITICAL):** Return a JSON array of objects. Each object in the array must contain:
-    *   `text`: The original lowercase input sentence (for verification purposes).
-    *   `tokens`: A JSON array of the tokenized words.
-    *   `tags`: A JSON array of the BIO tags, corresponding one-to-one with the `tokens` array.
-    *   `intent`: A single string representing the overall utterance intent.
+        *   The `<UTTERANCE_INTENT>` should be from `INTENT_TYPES`.
+    *   **CRITICAL:** Every token, including punctuation, must have a tag. Use `O` (Outside) if no entity or intent applies.
+3.  **EXTRACT INTENT:** Determine and provide the single overall `intent` of the entire input string from `INTENT_TYPES`.
+4.  **OUTPUT FORMAT (CRITICAL):** Return a JSON array of objects. Each object must contain:
+    *   `text`: The original lowercase input string (for verification).
+    *   `tokens`: A JSON array of all tokenized words and punctuation.
+    *   `tags`: A JSON array of BIO tags, exactly matching the `tokens` array in length.
+    *   `intent`: A single string representing the overall intent.
 
 **ENTITY TYPES LIST (USE ONLY THESE FOR ENTITY TAGS):**
 {json.dumps(ENTITY_TYPES, ensure_ascii=False, indent=2)}

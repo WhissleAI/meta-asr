@@ -5,7 +5,7 @@ import logging
 from dotenv import load_dotenv
 import torch
 from enum import Enum
-from pydantic import BaseModel, Field as PydanticField
+from pydantic import BaseModel, Field as PydanticField, validator
 from typing import Optional, List
 
 # Load environment variables
@@ -66,6 +66,10 @@ class ProcessRequest(BaseModel):
         None, description="List of annotations to include (age, gender, emotion, entity, intent).",
         example=["age", "gender", "emotion", "entity", "intent"]
     )
+    prompt: Optional[str] = PydanticField(  # New field
+        None, description="Custom prompt for annotation, used when transcription type is annotated.",
+        example="Transcribe and annotate the audio with BIO tags and intent."
+    )
 
 class TranscriptionJsonlRecord(BaseModel):
     audio_filepath: str
@@ -91,6 +95,7 @@ class AnnotatedJsonlRecord(BaseModel):
     ollama_intent: Optional[str] = None
     bio_annotation_gemini: Optional[BioAnnotation] = None
     bio_annotation_ollama: Optional[BioAnnotation] = None
+    prompt_used: Optional[str] = None  # New field
     error: Optional[str] = None
 
 class ProcessResponse(BaseModel):
@@ -99,3 +104,11 @@ class ProcessResponse(BaseModel):
     processed_files: int
     saved_records: int
     errors: int
+
+
+@validator('prompt')
+def validate_prompt(cls, v, values):
+    annotations = values.get('annotations')
+    if annotations and any(a in ['entity', 'intent'] for a in annotations) and not v:
+        raise ValueError("Prompt is required when entity or intent annotations are selected")
+    return v

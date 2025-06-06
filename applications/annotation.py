@@ -98,12 +98,14 @@ Sentences to Annotate Now:
 {json.dumps(texts_to_annotate, ensure_ascii=False, indent=2)}
 '''
 
-async def annotate_text_structured_with_gemini(text_to_annotate: str) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[str], Optional[str]]:
+async def annotate_text_structured_with_gemini(text_to_annotate: str,custom_prompt) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[str], Optional[str]]:
     if not GEMINI_CONFIGURED:
         return None, None, None, "Gemini API is not configured."
     if not text_to_annotate or text_to_annotate.isspace():
         return [], [], "NO_SPEECH_INPUT", None
-    prompt = get_annotation_prompt([text_to_annotate.lower()])
+    # prompt = get_annotation_prompt([text_to_annotate.lower()])
+    prompt = custom_prompt if custom_prompt else get_annotation_prompt([text_to_annotate.lower()])
+    logger.info(f"Using prompt for Gemini annotation: {prompt[:100]}...")  # Log first 100 chars to avoid clutter
     try:
         model = genai.GenerativeModel("models/gemini-1.5-flash")
         safety_settings = [

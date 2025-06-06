@@ -126,6 +126,8 @@ async def create_transcription_manifest_endpoint(process_request: ProcessRequest
 @router.post("/create_annotated_manifest/", response_model=ProcessResponse, summary="Create Annotated Manifest")
 async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
     model_choice = process_request.model_choice
+    # check if getting prompt
+    logger.info(f"Received request with prompt: {process_request.prompt[:100]}")
     if model_choice == ModelChoice.whissle and not WHISSLE_CONFIGURED:
         raise HTTPException(status_code=400, detail="Whissle not configured.")
     requires_gemini_for_annotation = process_request.annotations and any(a in ["entity", "intent"] for a in process_request.annotations)
@@ -222,13 +224,22 @@ async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
                                     if "emotion" in process_request.annotations:
                                         record_data["emotion"] = emotion_label.replace("_", " ").title() if emotion_label != "SHORT_AUDIO" else "Short Audio"
                 if requires_gemini_for_annotation and transcription_text and transcription_text.strip() != "":
-                    tokens, tags, intent, gemini_anno_err = await annotate_text_structured_with_gemini(transcription_text)
+                    if "entity" in process_request.annotations or "intent" in process_request.annotations:
+                            prompt_type = process_request.prompt if process_request.prompt else None
+                    tokens, tags, intent, gemini_anno_err = await annotate_text_structured_with_gemini(transcription_text, custom_prompt=prompt_type)
+                # if "entity" in process_request.annotations or "intent" in process_request.annotations:
+                #             prompt_type = process_request.prompt if process_request.prompt else None
+                #             try:
+                #                 tokens, tags, intent, gemini_anno_err = await annotate_text_structured_with_gemini(
+                #                     transcription_text, custom_prompt=prompt_type
+                #                 )
                     if gemini_anno_err:
                         file_error_details.append(f"GEMINI_ANNOTATION_FAIL: {gemini_anno_err}")
                         if "intent" in process_request.annotations: record_data["gemini_intent"] = "ANNOTATION_FAILED"
                     else:
                         if "entity" in process_request.annotations: record_data["bio_annotation_gemini"] = BioAnnotation(tokens=tokens, tags=tags)
                         if "intent" in process_request.annotations: record_data["gemini_intent"] = intent
+                    record_data["prompt_used"] = process_request.prompt  # Add prompt to record
                 elif requires_gemini_for_annotation:
                     if transcription_text == "":
                         if "intent" in process_request.annotations: record_data["gemini_intent"] = "NO_SPEECH"

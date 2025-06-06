@@ -5,21 +5,18 @@ from transformers import (
     Wav2Vec2Processor, Wav2Vec2PreTrainedModel, Wav2Vec2Model
 )
 import torch.nn as nn
-import google.generativeai as genai
-from deepgram import DeepgramClient
-from config import logger, GOOGLE_API_KEY, DEEPGRAM_API_KEY, WHISSLE_AUTH_TOKEN, device
+from config import logger, device
 
 # Globals for model availability
-GEMINI_CONFIGURED = False
-WHISSLE_CONFIGURED = False
-DEEPGRAM_CONFIGURED = bool(DEEPGRAM_API_KEY)
+GEMINI_AVAILABLE = False # Renamed from GEMINI_CONFIGURED, indicates library availability
+WHISSLE_AVAILABLE = False # Indicates library availability, WHISSLE_CONFIGURED removed as it was token dependent
+DEEPGRAM_AVAILABLE = False # Renamed from DEEPGRAM_CONFIGURED, indicates library availability
 
 # Model instances
 age_gender_model = None
 age_gender_processor = None
 emotion_model = None
 emotion_feature_extractor = None
-DEEPGRAM_CLIENT = None
 
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
@@ -56,50 +53,37 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
 
 # Load models and configure APIs
 try:
-    logger.info("Loading Age/Gender model...")
-    age_gender_model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
-    age_gender_processor = Wav2Vec2Processor.from_pretrained(age_gender_model_name)
-    age_gender_model = AgeGenderModel.from_pretrained(age_gender_model_name).to(device)
-    age_gender_model.eval()
-    logger.info("Age/Gender model loaded successfully.")
+    logger.info("Attempting to import google.generativeai for Gemini...")
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+    logger.info("Gemini (google.generativeai) library is available.")
+except ImportError:
+    logger.warning("google.generativeai library not found. Gemini features will be unavailable.")
+    GEMINI_AVAILABLE = False
 except Exception as e:
-    logger.error(f"Failed to load Age/Gender model: {e}", exc_info=True)
+    logger.error(f"Error during Gemini (google.generativeai) import or initial setup: {e}. Gemini features will be unavailable.")
+    GEMINI_AVAILABLE = False
 
-try:
-    logger.info("Loading Emotion model...")
-    emotion_model_name = "superb/hubert-large-superb-er"
-    emotion_feature_extractor = AutoFeatureExtractor.from_pretrained(emotion_model_name)
-    emotion_model = AutoModelForAudioClassification.from_pretrained(emotion_model_name).to(device)
-    emotion_model.eval()
-    logger.info("Emotion model loaded successfully.")
-except Exception as e:
-    logger.error(f"Failed to load Emotion model: {e}", exc_info=True)
-
-if GOOGLE_API_KEY:
-    try:
-        genai.configure(api_key=GOOGLE_API_KEY)
-        logger.info("Gemini API configured successfully.")
-        GEMINI_CONFIGURED = True
-    except Exception as e:
-        logger.error(f"Error configuring Gemini API: {e}. Gemini features will be unavailable.")
 
 try:
     from whissle import WhissleClient
     WHISSLE_AVAILABLE = True
-    if WHISSLE_AUTH_TOKEN:
-        logger.info("Whissle Auth Token found.")
-        WHISSLE_CONFIGURED = True
+    logger.info("WhissleClient SDK found and available.")
 except ImportError:
     logger.warning("WhissleClient SDK not found or failed to import. Whissle model will be unavailable.")
     WHISSLE_AVAILABLE = False
-    class WhissleClient: pass
+    class WhissleClient: pass # Keep shim for type hinting if used elsewhere
 
-if DEEPGRAM_CONFIGURED:
-    try:
-        DEEPGRAM_CLIENT = DeepgramClient(DEEPGRAM_API_KEY)
-        logger.info("Deepgram client initialized successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize Deepgram client: {e}")
-        DEEPGRAM_CONFIGURED = False
-else:
-    logger.warning("Deepgram API key not set. Deepgram transcription disabled.")
+# Check for Deepgram SDK availability
+try:
+    from deepgram import DeepgramClient as DeepgramSDKClient # Alias to avoid confusion if we had a global
+    DEEPGRAM_AVAILABLE = True
+    logger.info("Deepgram SDK is available.")
+except ImportError:
+    logger.warning("Deepgram SDK not found. Deepgram features will be unavailable.")
+    DEEPGRAM_AVAILABLE = False
+    class DeepgramSDKClient: pass # Shim for type hinting
+
+# Ensure DEEPGRAM_CONFIGURED (old name) is not used later, or update its usage.
+# For now, we'll rely on DEEPGRAM_AVAILABLE.
+# The actual configuration with a key will happen at request time.

@@ -57,8 +57,19 @@ class ModelChoice(str, Enum):
     whissle = "whissle"
     deepgram = "deepgram"
 
+USER_API_KEY_TTL_SECONDS = 30 * 60  # 30 minutes
+
+class UserApiKey(BaseModel):
+    provider: str
+    key: str
+
+class InitSessionRequest(BaseModel):
+    user_id: str
+    api_keys: List[UserApiKey]
+
 # Pydantic models for requests and responses
 class ProcessRequest(BaseModel):
+    user_id: str = PydanticField(..., description="Unique identifier for the user.", example="user_123")
     directory_path: str = PydanticField(..., description="Absolute path to the directory containing audio files.", example="/path/to/audio")
     model_choice: ModelChoice = PydanticField(..., description="The transcription model to use.")
     output_jsonl_path: str = PydanticField(..., description="Absolute path for the output JSONL file.", example="/path/to/output/results.jsonl")

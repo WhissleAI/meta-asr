@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Trash2, Edit3, PlusCircle } from 'lucide-react';
+import { initFastApiUserSession } from '../../utils/sessionManager'; // Added import
 
 interface ApiKey {
     id: string;
@@ -80,7 +81,8 @@ const SettingsDialog = ({ isSettingsOpen, setIsSettingsOpen }: SettingsProps) =>
             setCurrentProvider("");
             setCurrentKey("");
             setIsEditing(null);
-            fetchApiKeys(); // Refresh the list
+            await fetchApiKeys(); // Refresh the list
+            await initFastApiUserSession(); // Initialize/update FastAPI session
         } catch (error) {
             console.error("Error saving API key:", error);
             toast.error((error as Error).message || "Could not save API key.");
@@ -100,7 +102,8 @@ const SettingsDialog = ({ isSettingsOpen, setIsSettingsOpen }: SettingsProps) =>
                 throw new Error(errorData.error || 'Failed to delete API key');
             }
             toast.success(`API key for ${provider} deleted successfully.`);
-            fetchApiKeys(); // Refresh the list
+            await fetchApiKeys(); // Refresh the list
+            await initFastApiUserSession(); // Initialize/update FastAPI session
             if (isEditing === provider) { // If deleting the key being edited, reset form
                 setCurrentProvider("");
                 setCurrentKey("");

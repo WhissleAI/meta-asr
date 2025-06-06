@@ -2,8 +2,9 @@
 import json
 import asyncio
 from typing import Tuple, Optional, List
-from config import logger, ENTITY_TYPES, INTENT_TYPES
-from models import GEMINI_CONFIGURED
+from config import logger, ENTITY_TYPES, INTENT_TYPES # Relative import
+from models import GEMINI_AVAILABLE # Changed from GEMINI_CONFIGURED and relative import
+from session_store import get_user_api_key # Added for user-specific keys
 import google.generativeai as genai
 
 # def get_annotation_prompt(texts_to_annotate: List[str]) -> str:
@@ -98,9 +99,23 @@ Sentences to Annotate Now:
 {json.dumps(texts_to_annotate, ensure_ascii=False, indent=2)}
 '''
 
-async def annotate_text_structured_with_gemini(text_to_annotate: str,custom_prompt) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[str], Optional[str]]:
-    if not GEMINI_CONFIGURED:
-        return None, None, None, "Gemini API is not configured."
+async def annotate_text_structured_with_gemini(text_to_annotate: str, custom_prompt: Optional[str], user_id: str) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[str], Optional[str]]:
+    if not GEMINI_AVAILABLE:
+        return None, None, None, "Gemini (google.generativeai) library is not available."
+
+    gemini_api_key = get_user_api_key(user_id, "gemini")
+    if not gemini_api_key:
+        return None, None, None, "Gemini API key not found or session expired for user."
+
+    try:
+        # Configure Gemini with the user-specific key for this request
+        # Note: genai.configure is a global setting. This approach has limitations in highly concurrent scenarios
+        # if the SDK doesn't support per-client/per-request API keys directly.
+        genai.configure(api_key=gemini_api_key)
+    except Exception as e:
+        logger.error(f"Failed to configure Gemini with user API key for user {user_id}: {e}")
+        return None, None, None, "Failed to configure Gemini API with user key."
+
     if not text_to_annotate or text_to_annotate.isspace():
         return [], [], "NO_SPEECH_INPUT", None
     # prompt = get_annotation_prompt([text_to_annotate.lower()])

@@ -13,6 +13,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { loadPrompts } from "@/utils/loadPrompt"
 import { AlertCircle, CheckCircle, Loader2 } from "lucide-react"
 import { useEffect, useState } from "react"
+import { useSession } from "next-auth/react"
+import { initFastApiUserSession } from "@/utils/sessionManager"
 
 interface ProcessResponse {
   message: string
@@ -23,6 +25,7 @@ interface ProcessResponse {
 }
 
 export default function Home() {
+  const { data: session, status: sessionStatus } = useSession()
   const [directoryPath, setDirectoryPath] = useState("")
   const [transcriptionType, setTranscriptionType] = useState<"simple" | "annotated">("simple")
   const [modelChoice, setModelChoice] = useState<"gemini" | "whissle" | "deepgram" | "openai">("gemini")
@@ -40,6 +43,14 @@ export default function Home() {
   const [response, setResponse] = useState<ProcessResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+
+  // Initialize FastAPI session on authenticated load
+  useEffect(() => {
+    if (sessionStatus === "authenticated") {
+      console.log("User authenticated, attempting to initialize FastAPI session...")
+      initFastApiUserSession()
+    }
+  }, [sessionStatus])
 
   // Simulate loading prompts from \lib\prompt_library.txt
   useEffect(() => {
@@ -61,12 +72,19 @@ export default function Home() {
   }
 
   const handleSubmit = async () => {
+    if (sessionStatus !== "authenticated" || !session?.user?.id) {
+      setError("User not authenticated. Please sign in.")
+      setIsLoading(false)
+      return
+    }
+    const userId = session.user.id
+
     setIsLoading(true)
     setError(null)
     setResponse(null)
 
     // Basic tracking for button click
-    console.log("Audio processing started", {
+    console.log("Audio processing started for user:", userId, {
       transcriptionType,
       modelChoice,
       directoryPath,
@@ -84,6 +102,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          user_id: userId, // Added user_id
           directory_path: directoryPath,
           model_choice: modelChoice,
           output_jsonl_path: outputPath,

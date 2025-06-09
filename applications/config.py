@@ -22,6 +22,10 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg', '.m4a']
 TARGET_SAMPLE_RATE = 16000
 
+# GCS Configuration
+GOOGLE_APPLICATION_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_PATH")
+TEMP_DOWNLOAD_DIR = os.getenv("TEMP_DOWNLOAD_DIR", "d:/z-whissle/meta-asr/temp_gcs_downloads") # Default if not in .env
+
 ENTITY_TYPES = [
     "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",
     "DATE", "TIME", "DURATION", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "DEADLINE", "DELIVERY_DATE", "DELIVERY_TIME",
@@ -50,6 +54,17 @@ INTENT_TYPES = [
 # Device setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.info(f"Using device: {device}")
+if GOOGLE_APPLICATION_CREDENTIALS_PATH:
+    logger.info(f"GCS Service Account Key Path: {GOOGLE_APPLICATION_CREDENTIALS_PATH}")
+else:
+    logger.warning("GOOGLE_APPLICATION_CREDENTIALS_PATH not set in .env. GCS download functionality will be disabled.")
+logger.info(f"Temporary download directory for GCS files: {TEMP_DOWNLOAD_DIR}")
+
+# Ensure the temporary download directory exists
+try:
+    Path(TEMP_DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
+except Exception as e:
+    logger.error(f"Failed to create temporary download directory {TEMP_DOWNLOAD_DIR}: {e}")
 
 # Model choice enum
 class ModelChoice(str, Enum):
@@ -82,6 +97,19 @@ class ProcessRequest(BaseModel):
         example="Transcribe and annotate the audio with BIO tags and intent."
     )
 
+class GcsProcessRequest(BaseModel):
+    user_id: str = PydanticField(..., description="Unique identifier for the user.", example="user_123")
+    gcs_path: str = PydanticField(..., description="Full GCS path to the audio file (e.g., gs://bucket_name/path/to/audio.wav).", example="gs://your-bucket/audio.wav")
+    model_choice: ModelChoice = PydanticField(..., description="The transcription model to use.")
+    annotations: Optional[List[str]] = PydanticField(
+        None, description="List of annotations to include (age, gender, emotion, entity, intent).",
+        example=["age", "gender", "emotion"]
+    )
+    prompt: Optional[str] = PydanticField(
+        None, description="Custom prompt for annotation, used if entity/intent annotations are requested.",
+        example="Focus on medical entities."
+    )
+
 class TranscriptionJsonlRecord(BaseModel):
     audio_filepath: str
     text: Optional[str] = None
@@ -108,6 +136,21 @@ class AnnotatedJsonlRecord(BaseModel):
     bio_annotation_ollama: Optional[BioAnnotation] = None
     prompt_used: Optional[str] = None  # New field
     error: Optional[str] = None
+
+class SingleFileProcessResponse(BaseModel):
+    original_gcs_path: str
+    downloaded_local_path: Optional[str] = None
+    status_message: str
+    duration: Optional[float] = None
+    transcription: Optional[str] = None
+    age_group: Optional[str] = None
+    gender: Optional[str] = None
+    emotion: Optional[str] = None
+    bio_annotation_gemini: Optional[BioAnnotation] = None # Reusing existing BioAnnotation model
+    gemini_intent: Optional[str] = None
+    prompt_used: Optional[str] = None
+    error_details: Optional[List[str]] = None # To capture a list of errors if multiple steps fail
+    overall_error: Optional[str] = None # A summary error message
 
 class ProcessResponse(BaseModel):
     message: str

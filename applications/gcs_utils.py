@@ -3,26 +3,21 @@ import os
 from pathlib import Path
 from typing import Optional, Tuple
 from google.cloud import storage
-from config import logger, GOOGLE_APPLICATION_CREDENTIALS_PATH, TEMP_DOWNLOAD_DIR
+from .config import logger, TEMP_DOWNLOAD_DIR # Relative import for config
 
 _storage_client: Optional[storage.Client] = None
 
 def get_gcs_client() -> Optional[storage.Client]:
-    """Initializes and returns a GCS storage client if credentials are set."""
+    """Initializes and returns an anonymous GCS storage client."""
     global _storage_client
     if _storage_client:
         return _storage_client
-
-    if GOOGLE_APPLICATION_CREDENTIALS_PATH and os.path.exists(GOOGLE_APPLICATION_CREDENTIALS_PATH):
-        try:
-            _storage_client = storage.Client.from_service_account_json(GOOGLE_APPLICATION_CREDENTIALS_PATH)
-            logger.info("Google Cloud Storage client initialized successfully using service account.")
-            return _storage_client
-        except Exception as e:
-            logger.error(f"Failed to initialize GCS client from service account json {GOOGLE_APPLICATION_CREDENTIALS_PATH}: {e}", exc_info=True)
-            return None
-    else:
-        logger.warning("GOOGLE_APPLICATION_CREDENTIALS_PATH is not set or file does not exist. GCS client not initialized.")
+    try:
+        _storage_client = storage.Client.create_anonymous_client()
+        logger.info("Google Cloud Storage client initialized anonymously (for public buckets).")
+        return _storage_client
+    except Exception as e:
+        logger.error(f"Failed to initialize anonymous GCS client: {e}", exc_info=True)
         return None
 
 def parse_gcs_path(gcs_path: str) -> Tuple[Optional[str], Optional[str]]:
@@ -56,18 +51,12 @@ def download_gcs_blob(bucket_name: str, blob_name: str) -> Optional[Path]:
         blob = bucket.blob(blob_name)
 
         if not blob.exists():
-            logger.error(f"Blob gs://{bucket_name}/{blob_name} does not exist.")
+            logger.error(f"Blob gs://{bucket_name}/{blob_name} does not exist or is not publicly accessible.")
             return None
 
-        # Construct a unique-ish local file name to avoid collisions if multiple users download same file name
-        # For simplicity, using blob_name directly. For more robustness, add a unique ID or user ID.
-        # The TEMP_DOWNLOAD_DIR should be cleaned periodically by a separate process.
-        local_file_name = Path(blob_name).name # Get the base file name
+        local_file_name = Path(blob_name).name
         destination_path = Path(TEMP_DOWNLOAD_DIR) / local_file_name
         
-        # Ensure parent directory of destination_path exists (TEMP_DOWNLOAD_DIR itself is created in config.py)
-        # destination_path.parent.mkdir(parents=True, exist_ok=True) # TEMP_DOWNLOAD_DIR is the parent
-
         logger.info(f"Attempting to download gs://{bucket_name}/{blob_name} to {destination_path}")
         blob.download_to_filename(str(destination_path))
         logger.info(f"Successfully downloaded gs://{bucket_name}/{blob_name} to {destination_path}")

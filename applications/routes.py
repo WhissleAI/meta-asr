@@ -25,7 +25,7 @@ from models import (
     emotion_model, emotion_feature_extractor
     # Removed GEMINI_CONFIGURED, WHISSLE_CONFIGURED, DEEPGRAM_CONFIGURED as they are replaced by session checks
 )
-from audio_utils import validate_paths, discover_audio_files, load_audio, get_audio_duration
+from audio_utils import validate_paths, discover_audio_files, load_audio, get_audio_duration, trim_audio # Added trim_audio
 from transcription import transcribe_with_whissle_single, transcribe_with_gemini_single, transcribe_with_deepgram_single
 from annotation import annotate_text_structured_with_gemini
 from session_store import init_user_session, is_user_session_valid, get_user_api_key # Added session_store imports
@@ -170,6 +170,120 @@ async def create_transcription_manifest_endpoint(process_request: ProcessRequest
         raise HTTPException(status_code=500, detail=f"Failed to write output file: {e}")
     
     msg = f"Processed {processed_files_count}/{len(audio_files)}. Saved: {saved_records_count}. Errors: {error_count}."
+    return ProcessResponse(message=msg, output_file=str(output_jsonl_path), processed_files=processed_files_count, saved_records=saved_records_count, errors=error_count)
+
+@router.post("/trim_audio_and_transcribe/", response_model=ProcessResponse, summary="Trim Audio Files and Create Transcription Manifest")
+async def trim_audio_and_transcribe_endpoint(process_request: ProcessRequest):
+    user_id = process_request.user_id
+    if not is_user_session_valid(user_id):
+        raise HTTPException(status_code=401, detail="User session is invalid or expired. Please re-initialize session.")
+
+    model_choice = process_request.model_choice
+    provider_name = model_choice.value
+    segment_length_sec = process_request.segment_length_sec # Assuming this is added to ProcessRequest
+
+    if not segment_length_sec or segment_length_sec <= 0:
+        raise HTTPException(status_code=400, detail="Invalid segment length provided.")
+    segment_length_ms = segment_length_sec * 1000
+
+    # Check service availability and user key (similar to create_transcription_manifest_endpoint)
+    service_available = False
+    if model_choice == ModelChoice.whissle:
+        service_available = WHISSLE_AVAILABLE
+    elif model_choice == ModelChoice.gemini:
+        service_available = GEMINI_AVAILABLE
+    elif model_choice == ModelChoice.deepgram:
+        service_available = DEEPGRAM_AVAILABLE
+
+    if not service_available:
+        raise HTTPException(status_code=400, detail=f"{provider_name.capitalize()} SDK is not available on the server.")
+
+    if not get_user_api_key(user_id, provider_name):
+        raise HTTPException(status_code=400, detail=f"API key for {provider_name.capitalize()} not found for user or session expired.")
+
+    dir_path, output_jsonl_path = validate_paths(process_request.directory_path, process_request.output_jsonl_path)
+    original_audio_files = discover_audio_files(dir_path)
+
+    if not original_audio_files:
+        try:
+            with open(output_jsonl_path, "w", encoding="utf-8") as _: pass
+        except IOError as e:
+            raise HTTPException(status_code=500, detail=f"Failed to create empty output file: {e}")
+        return ProcessResponse(message=f"No audio files found in the directory.", output_file=str(output_jsonl_path), processed_files=0, saved_records=0, errors=0)
+
+    processed_files_count = 0
+    saved_records_count = 0
+    error_count = 0
+    all_trimmed_audio_paths = []
+
+    # Create a subdirectory for trimmed files within the original audio directory
+    trimmed_audio_base_dir = dir_path / "trimmed_segments"
+    trimmed_audio_base_dir.mkdir(parents=True, exist_ok=True)
+
+    for audio_file in original_audio_files:
+        try:
+            # Create a unique subdirectory for each original file's segments
+            file_specific_trimmed_dir = trimmed_audio_base_dir / audio_file.stem
+            trimmed_segments = await asyncio.to_thread(trim_audio, audio_file, segment_length_ms, file_specific_trimmed_dir)
+            all_trimmed_audio_paths.extend(trimmed_segments)
+        except Exception as e:
+            logger.error(f"Error trimming {audio_file.name}: {e}", exc_info=True)
+            error_count += 1 # Count error for the original file that failed to trim
+    
+    if not all_trimmed_audio_paths:
+        return ProcessResponse(message=f"No audio segments were created after trimming. Original errors: {error_count}", output_file=str(output_jsonl_path), processed_files=len(original_audio_files), saved_records=0, errors=error_count)
+
+    # Now transcribe the trimmed segments
+    try:
+        with open(output_jsonl_path, "w", encoding="utf-8") as outfile:
+            for audio_segment_path in all_trimmed_audio_paths:
+                file_error: Optional[str] = None
+                transcription_text: Optional[str] = None
+                duration: Optional[float] = None
+                logger.info(f"--- Processing segment {audio_segment_path.name} (Transcription for user {user_id}) ---")
+                processed_files_count += 1 # Now counting segments
+                try:
+                    duration = get_audio_duration(audio_segment_path)
+                    if model_choice == ModelChoice.whissle:
+                        transcription_text, transcription_error = await transcribe_with_whissle_single(audio_segment_path, user_id)
+                    elif model_choice == ModelChoice.gemini:
+                        transcription_text, transcription_error = await transcribe_with_gemini_single(audio_segment_path, user_id)
+                    elif model_choice == ModelChoice.deepgram:
+                        transcription_text, transcription_error = await transcribe_with_deepgram_single(audio_segment_path, user_id)
+                    else:
+                        transcription_error = "Invalid model choice."
+
+                    if transcription_error:
+                        file_error = f"Transcription failed: {transcription_error}"
+                    elif transcription_text is None:
+                        file_error = "Transcription returned None without an error."
+
+                except Exception as e:
+                    logger.error(f"Unexpected error processing segment {audio_segment_path.name} for user {user_id}: {e}", exc_info=True)
+                    file_error = f"Unexpected error: {type(e).__name__}: {e}"
+                
+                record = TranscriptionJsonlRecord(
+                    audio_filepath=str(audio_segment_path.resolve()), 
+                    text=transcription_text, 
+                    duration=duration, 
+                    model_used_for_transcription=model_choice.value, 
+                    error=file_error
+                )
+                try:
+                    outfile.write(record.model_dump_json(exclude_none=True) + "\n")
+                except Exception as write_e:
+                    logger.error(f"Failed to write record for {audio_segment_path.name}: {write_e}", exc_info=True)
+                    file_error = (file_error + "; " if file_error else "") + f"JSONL write error: {write_e}"
+                
+                if file_error:
+                    error_count += 1 # Counting errors for segments
+                else:
+                    saved_records_count += 1
+                gc.collect()
+    except IOError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write output file: {e}")
+    
+    msg = f"Processed {processed_files_count}/{len(all_trimmed_audio_paths)} audio segments. Saved: {saved_records_count}. Errors: {error_count}. Original files processed for trimming: {len(original_audio_files)}."
     return ProcessResponse(message=msg, output_file=str(output_jsonl_path), processed_files=processed_files_count, saved_records=saved_records_count, errors=error_count)
 
 @router.post("/create_annotated_manifest/", response_model=ProcessResponse, summary="Create Annotated Manifest")

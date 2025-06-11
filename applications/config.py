@@ -92,6 +92,10 @@ class ProcessRequest(BaseModel):
         None, description="Custom prompt for annotation, used when transcription type is annotated.",
         example="Transcribe and annotate the audio with BIO tags and intent."
     )
+    segment_length_sec: Optional[float] = PydanticField( # New field for trimming
+        None, description="Desired length of audio segments in seconds. If provided, audio will be trimmed.",
+        example=10.0
+    )
 
 class TranscriptionJsonlRecord(BaseModel):
     audio_filepath: str

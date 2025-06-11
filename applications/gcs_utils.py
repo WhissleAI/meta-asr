@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Optional, Tuple
 from google.cloud import storage
-from .config import logger, TEMP_DOWNLOAD_DIR # Relative import for config
+from config import logger, TEMP_DOWNLOAD_DIR # Relative import for config
 
 _storage_client: Optional[storage.Client] = None
 

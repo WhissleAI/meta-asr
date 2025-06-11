@@ -70,6 +70,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false)
   const [gcsProcessingStatus, setGcsProcessingStatus] = useState<string[]>([])
   const websocketRef = useRef<WebSocket | null>(null)
+  const [segmentLength, setSegmentLength] = useState<number | string>("") // New state for segment length
 
   // Initialize FastAPI session on authenticated load
   useEffect(() => {
@@ -152,11 +153,14 @@ export default function Home() {
       outputPath: sourceType === "directory" ? outputPath : null,
       annotations: selectedAnnotations,
       prompt: transcriptionType === "annotated" ? customPrompt : null,
+      segment_length_sec: sourceType === "directory" && segmentLength ? Number(segmentLength) : null, // Add segment length to log
       timestamp: new Date().toISOString(),
     })
 
     if (sourceType === "directory") {
-      const endpoint = transcriptionType === "annotated" && selectedAnnotations.length > 0
+      const endpoint = segmentLength // If segmentLength is set, use the new endpoint
+        ? "/trim_audio_and_transcribe/"
+        : transcriptionType === "annotated" && selectedAnnotations.length > 0
         ? "/create_annotated_manifest/"
         : "/create_transcription_manifest/"
 
@@ -171,6 +175,7 @@ export default function Home() {
             output_jsonl_path: outputPath,
             ...(selectedAnnotations.length > 0 && { annotations: selectedAnnotations }),
             ...(transcriptionType === "annotated" && { prompt: customPrompt }),
+            ...(segmentLength && { segment_length_sec: Number(segmentLength) }), // Add segment length to request
           }),
         })
         if (!res.ok) {
@@ -442,16 +447,32 @@ export default function Home() {
           <Separator className="my-4" />
 
           {sourceType === "directory" && (
-            <div className="space-y-2">
-              <Label htmlFor="output-path">Output JSONL Path</Label>
-              <Input
-                id="output-path"
-                value={outputPath}
-                onChange={(e) => setOutputPath(e.target.value)}
-                placeholder="/home/user/workspace/test/output.jsonl"
-                disabled={isLoading}
-              />
-            </div>
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="output-path">Output JSONL Path</Label>
+                <Input
+                  id="output-path"
+                  value={outputPath}
+                  onChange={(e) => setOutputPath(e.target.value)}
+                  placeholder="/home/user/workspace/test/output.jsonl"
+                  disabled={isLoading}
+                />
+              </div>
+              <div className="space-y-2 mt-4"> {/* Added mt-4 for spacing */}
+                <Label htmlFor="segment-length">Segment Length (seconds)</Label>
+                <Input
+                  id="segment-length"
+                  type="number"
+                  value={segmentLength}
+                  onChange={(e) => setSegmentLength(e.target.value)}
+                  placeholder="e.g., 10 (trims audio into 10-second segments)"
+                  disabled={isLoading}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Optional. If provided, audio files will be trimmed into segments of this length before transcription.
+                </p>
+              </div>
+            </>
           )}
         </CardContent>
         <CardFooter>

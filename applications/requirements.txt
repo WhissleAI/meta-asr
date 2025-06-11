@@ -15,3 +15,4 @@ scipy==1.11.3
 typing-extensions==4.8.0
 deepgram-sdk
 google-cloud-storage
+pydub

@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException, APIRouter, WebSocket # Added WebSock
 from fastapi.responses import FileResponse
 from pathlib import Path
 import gc
+import os
 import torch
 import asyncio
 from typing import Dict, Any, List, Tuple, Optional

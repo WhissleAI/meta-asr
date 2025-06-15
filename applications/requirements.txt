@@ -14,3 +14,5 @@ whissle
 scipy
 typing-extensions
 deepgram-sdk
+google-cloud-storage
+pydub

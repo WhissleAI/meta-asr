@@ -28,6 +28,7 @@ from models import (
 from audio_utils import validate_paths, discover_audio_files, load_audio, get_audio_duration, trim_audio # Added trim_audio
 from transcription import transcribe_with_whissle_single, transcribe_with_gemini_single, transcribe_with_deepgram_single
 from annotation import annotate_text_structured_with_gemini
+import json
 from session_store import init_user_session, is_user_session_valid, get_user_api_key # Added session_store imports
 from gcs_utils import parse_gcs_path, download_gcs_blob # Added
 from websocket_utils import manager as websocket_manager # Added WebSocket manager
@@ -283,7 +284,7 @@ async def trim_audio_and_transcribe_endpoint(process_request: ProcessRequest):
     except IOError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write output file: {e}")
     
-    msg = f"Processed {processed_files_count}/{len(all_trimmed_audio_paths)} audio segments. Saved: {saved_records_count}. Errors: {error_count}. Original files processed for trimming: {len(original_audio_files)}."
+    msg = f"Processed {processed_files_count}/{len(all_trimmed_audio_paths)} audio segments. Saved: {saved_records_count}. Errors: {error_count}."
     return ProcessResponse(message=msg, output_file=str(output_jsonl_path), processed_files=processed_files_count, saved_records=saved_records_count, errors=error_count)
 
 @router.post("/create_annotated_manifest/", response_model=ProcessResponse, summary="Create Annotated Manifest")
@@ -495,7 +496,9 @@ async def _process_single_downloaded_file(
     user_id: str,
     model_choice: ModelChoice,
     requested_annotations: Optional[List[str]],
-    custom_prompt: Optional[str]
+    custom_prompt: Optional[str],
+    output_jsonl_path: Path, # New parameter
+    original_gcs_path: str # New parameter
 ) -> Dict[str, Any]:
     """
     Processes a single downloaded audio file for transcription and optional annotation.
@@ -608,12 +611,48 @@ async def _process_single_downloaded_file(
     else:
         await websocket_manager.send_personal_message({"status": "processing_complete", "detail": "All processing finished successfully.", "data": results}, user_id)
     
+    # Save to JSONL
+    try:
+        record_to_save = {
+            "audio_filepath": original_gcs_path, # Use original GCS path
+            "text": results.get("transcription"),
+            "duration": results.get("duration"),
+            "model_used_for_transcription": model_choice.value,
+            "age_group": results.get("age_group"),
+            "gender": results.get("gender"),
+            "emotion": results.get("emotion"),
+            "bio_annotation_gemini": results.get("bio_annotation_gemini"),
+            "gemini_intent": results.get("gemini_intent"),
+            "prompt_used": results.get("prompt_used"),
+            "error": results.get("overall_error_summary")
+        }
+        # Filter out None values before saving
+        final_record = {k: v for k, v in record_to_save.items() if v is not None}
+
+        with open(output_jsonl_path, 'a', encoding='utf-8') as f_out:
+            json.dump(final_record, f_out)
+            f_out.write('\n')
+        logger.info(f"User {user_id} - Successfully saved GCS processing result to {output_jsonl_path}")
+        await websocket_manager.send_personal_message({"status": "result_saved", "detail": f"Result saved to {output_jsonl_path.name}"}, user_id)
+
+    except IOError as e:
+        logger.error(f"User {user_id} - Failed to write GCS result to {output_jsonl_path}: {e}")
+        results["error_details"].append(f"Failed to save result: {e}")
+        results["overall_error_summary"] = "; ".join(results["error_details"])
+        await websocket_manager.send_personal_message({"status": "save_failed", "detail": f"Failed to save result to {output_jsonl_path.name}"}, user_id)
+    except Exception as e:
+        logger.error(f"User {user_id} - Unexpected error saving GCS result to {output_jsonl_path}: {e}", exc_info=True)
+        results["error_details"].append(f"Unexpected error saving result: {e}")
+        results["overall_error_summary"] = "; ".join(results["error_details"])
+        await websocket_manager.send_personal_message({"status": "save_failed", "detail": f"Unexpected error saving result to {output_jsonl_path.name}"}, user_id)
+
     return results
 
 @router.post("/process_gcs_file/", response_model=SingleFileProcessResponse, summary="Download and Process a Single File from GCS")
 async def process_gcs_file_endpoint(request: GcsProcessRequest):
     user_id = request.user_id
-    logger.info(f"User {user_id} - Received request to process GCS file: {request.gcs_path}")
+    output_jsonl_path_str = request.output_jsonl_path # Get the output path string
+    logger.info(f"User {user_id} - Received request to process GCS file: {request.gcs_path}. Output will be saved to: {output_jsonl_path_str}")
     await websocket_manager.send_personal_message({"status": "request_received", "detail": f"Received request for {request.gcs_path}"}, user_id)
 
     if not is_user_session_valid(user_id):
@@ -639,6 +678,20 @@ async def process_gcs_file_endpoint(request: GcsProcessRequest):
     await websocket_manager.send_personal_message({"status": "download_started", "detail": f"Downloading gs://{bucket_name}/{blob_name}..."}, user_id)
     local_audio_path: Optional[Path] = None
     try:
+        # Validate and create Path object for output_jsonl_path
+        output_jsonl_path = Path(output_jsonl_path_str)
+        if not output_jsonl_path.parent.exists():
+            try:
+                output_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+                logger.info(f"User {user_id} - Created directory for output JSONL: {output_jsonl_path.parent}")
+            except Exception as e:
+                logger.error(f"User {user_id} - Failed to create directory {output_jsonl_path.parent}: {e}")
+                return SingleFileProcessResponse(
+                    original_gcs_path=request.gcs_path,
+                    status_message=f"Failed to create output directory: {output_jsonl_path.parent}",
+                    overall_error="OutputDirectoryError"
+                )
+
         local_audio_path = await asyncio.to_thread(download_gcs_blob, bucket_name, blob_name)
         if not local_audio_path:
             logger.error(f"User {user_id} - Failed to download gs://{bucket_name}/{blob_name}")
@@ -657,10 +710,12 @@ async def process_gcs_file_endpoint(request: GcsProcessRequest):
             user_id,
             request.model_choice,
             request.annotations,
-            request.prompt
+            request.prompt,
+            output_jsonl_path, # Pass the Path object
+            request.gcs_path # Pass original GCS path for saving
         )
         
-        status_msg = "File processed."
+        status_msg = f"File processed. Results saved to {output_jsonl_path.name}"
         if processing_results.get("overall_error_summary"):
             status_msg = f"File processed with errors/warnings: {processing_results['overall_error_summary']}"
         elif not processing_results.get("transcription") and not processing_results.get("overall_error_summary"):

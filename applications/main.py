@@ -29,6 +29,7 @@ app.add_middleware(
 )
 
 # Mount static files
+# Mount static files
 current_file_path = Path(__file__).parent
 static_dir = current_file_path / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -36,6 +37,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 # Serve index.html
 @app.get("/", include_in_schema=False)
 async def serve_index():
+    """Serve the main HTML interface"""
     index_html_path = current_file_path / "static" / "index.html"
     if not index_html_path.is_file():
         logger.error(f"HTML file not found at: {index_html_path}")
@@ -53,7 +55,16 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     reload = os.getenv("RELOAD", "true").lower() == "true"
     log_level = "info"
+    
     logger.info(f"Starting FastAPI server for '{app_module_string}' on {host}:{port}...")
     logger.info(f"Log Level: {log_level.upper()}, Reload Mode: {'Enabled' if reload else 'Disabled'}")
     logger.info(f"Docs: http://{host}:{port}/docs, UI: http://{host}:{port}/")
-    uvicorn.run(app_module_string, host=host, port=port, reload=reload, reload_dirs=[str(script_dir)] if reload else None, log_level=log_level)
+    
+    uvicorn.run(
+        app_module_string, 
+        host=host, 
+        port=port, 
+        reload=reload, 
+        reload_dirs=[str(script_dir)] if reload else None, 
+        log_level=log_level
+    )

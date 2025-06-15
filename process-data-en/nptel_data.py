@@ -513,8 +513,8 @@ def process_audio_and_annotate(base_dir: str, output_jsonl_path: str, batch_size
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    BASE_AUDIO_TEXT_DIR = "/external3/databases/NPTEL2020-Indian-English-Speech-Dataset/nptel-valid"
-    FINAL_OUTPUT_JSONL = "/external3/databases/NPTEL2020-Indian-English-Speech-Dataset/nptel-valid/nptel_english_annotated_v2_lowercase.jsonl" # Changed output file name
+    BASE_AUDIO_TEXT_DIR = "/external3/databases/NPTEL2020-Indian-English-Speech-Dataset/nptel-test"
+    FINAL_OUTPUT_JSONL = "/external3/databases/NPTEL2020-Indian-English-Speech-Dataset/nptel-test/nptel_english_annotated_v2_lowercase.jsonl" # Changed output file name
     PROCESSING_BATCH_SIZE = 10
 
     print("Starting English Audio Processing and Annotation Workflow (with lowercase transcriptions)...")

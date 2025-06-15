@@ -28,7 +28,6 @@ def remove_existing_tags(text):
     cleaned_text = re.sub(r'\s?END', '', cleaned_text)
 
     return cleaned_text
-
 def fix_end_tags(text):
     """
     Ensure that every ENTITY_ annotation is followed by a space and 'END'.

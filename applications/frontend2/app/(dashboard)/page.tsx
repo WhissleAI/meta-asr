@@ -54,7 +54,8 @@ export default function Home() {
   const [inputPath, setInputPath] = useState("")
   const [transcriptionType, setTranscriptionType] = useState<"simple" | "annotated">("simple")
   const [modelChoice, setModelChoice] = useState<"gemini" | "whissle" | "deepgram" | "openai">("gemini")
-  const [outputPath, setOutputPath] = useState("")
+  const [outputPath, setOutputPath] = useState("") // For directory source
+  const [gcsOutputJsonlPath, setGcsOutputJsonlPath] = useState("") // New: For GCS source output
   const [annotations, setAnnotations] = useState({
     age: false,
     gender: false,
@@ -133,6 +134,11 @@ export default function Home() {
       setIsLoading(false)
       return
     }
+    if (sourceType === "gcs" && !gcsOutputJsonlPath) { // New: Check for GCS output path
+      toast.error("Missing GCS Output JSONL Path", { description: "Output JSONL path is required for GCS processing." })
+      setIsLoading(false)
+      return
+    }
 
     const userId = session.user.id
     setIsLoading(true)
@@ -150,7 +156,7 @@ export default function Home() {
       transcriptionType,
       modelChoice,
       inputPath,
-      outputPath: sourceType === "directory" ? outputPath : null,
+      outputPath: sourceType === "directory" ? outputPath : gcsOutputJsonlPath, // Modified: use gcsOutputJsonlPath for GCS
       annotations: selectedAnnotations,
       prompt: transcriptionType === "annotated" ? customPrompt : null,
       segment_length_sec: sourceType === "directory" && segmentLength ? Number(segmentLength) : null, // Add segment length to log
@@ -246,45 +252,71 @@ export default function Home() {
   }
 
   const triggerGcsProcessingApi = async (currentGcsPath: string) => {
+    setIsLoading(true); // Ensure loading is true at the start
+    setError(null);
+    setResponse(null);
+    // setGcsProcessingStatus([]); // Keep previous status messages or clear as preferred
+
     try {
       const selectedAnnotationsList = transcriptionType === "annotated"
         ? Object.keys(annotations).filter(key => annotations[key as keyof typeof annotations])
         : []
       const apiRequestBody = {
+        user_id: session?.user?.id,
         gcs_path: currentGcsPath,
         model_choice: modelChoice,
         annotations: selectedAnnotationsList,
         prompt: transcriptionType === "annotated" && customPrompt ? customPrompt : null,
+        output_jsonl_path: gcsOutputJsonlPath, // New: Add GCS output path to request
       }
-      const response = await fetch('/api/process-gcs-file-proxy', {
+      const fetchResponse = await fetch('/api/process-gcs-file-proxy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(apiRequestBody),
       })
-      const resultData = await response.json()
-      if (!response.ok) {
-        const errorMsg = resultData.error || resultData.detail || "Unknown error from backend proxy."
-        toast.error("GCS File Processing Failed", { description: errorMsg })
+
+      if (!fetchResponse.ok) {
+        let errorMsg = `HTTP error! Status: ${fetchResponse.status}`;
+        try {
+          // Try to parse the error response as JSON
+          const errorData = await fetchResponse.json();
+          errorMsg = errorData.error || errorData.detail || JSON.stringify(errorData);
+        } catch (e) {
+          // If parsing as JSON fails, try to get the response as text
+          try {
+            const errorText = await fetchResponse.text();
+            errorMsg = errorText || errorMsg; // Use text if available and not empty
+            console.error("Received non-JSON error response:", errorText);
+          } catch (textError) {
+            console.error("Failed to get error response as text:", textError);
+          }
+        }
+        toast.error("GCS File Processing Failed", { description: errorMsg });
         setResponse({
           original_gcs_path: currentGcsPath,
           status_message: `Error: ${errorMsg}`,
           overall_error: errorMsg
-        } as GcsProcessingResult)
-      } else {
-        toast.success("GCS File Processing Complete", { description: resultData.message || "Processing finished." })
-        setResponse(resultData.data as GcsProcessingResult)
+        } as GcsProcessingResult);
+        return; // Exit after handling error
       }
-    } catch (error) {
-      console.error("Error calling GCS processing API:", error)
-      const clientErrorMsg = (error as Error).message || "Could not send request to backend proxy."
-      toast.error("GCS Processing Request Error", { description: clientErrorMsg })
+
+      // If fetchResponse.ok is true, then try to parse the successful response as JSON
+      const resultData = await fetchResponse.json(); // This is the line (around 264) that might throw
+      
+      toast.success("GCS File Processing Complete", { description: resultData.message || "Processing finished." });
+      setResponse(resultData.data as GcsProcessingResult);
+
+    } catch (error) { // This catch handles network errors or errors from fetchResponse.json() itself
+      console.error("Error calling GCS processing API or parsing JSON:", error);
+      const clientErrorMsg = (error instanceof Error ? error.message : String(error)) || "Could not send request or parse response.";
+      toast.error("GCS Processing Request Error", { description: clientErrorMsg });
       setResponse({
         original_gcs_path: currentGcsPath,
         status_message: `Client-side error: ${clientErrorMsg}`,
         overall_error: "ClientRequestError",
-      } as GcsProcessingResult)
+      } as GcsProcessingResult);
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
   }
 
@@ -306,6 +338,7 @@ export default function Home() {
                 setSourceType(value as "directory" | "gcs")
                 setInputPath("")
                 setOutputPath("")
+                setGcsOutputJsonlPath("") // New: Reset GCS output path on source change
                 setResponse(null)
                 setError(null)
                 setGcsProcessingStatus([])
@@ -335,6 +368,22 @@ export default function Home() {
               {sourceType === "directory" ? "Path must be accessible to the backend server" : "Enter a valid GCS path starting with gs://"}
             </p>
           </div>
+
+          {sourceType === "gcs" && ( // New: Input field for GCS output path
+            <div className="space-y-2">
+              <Label htmlFor="gcs-output-path">Output JSONL Path (GCS)</Label>
+              <Input
+                id="gcs-output-path"
+                value={gcsOutputJsonlPath}
+                onChange={(e) => setGcsOutputJsonlPath(e.target.value)}
+                placeholder="/path/on/server/to/gcs_output.jsonl"
+                disabled={isLoading}
+              />
+              <p className="text-sm text-muted-foreground">
+                Server-side path where the GCS processing result (JSONL) will be saved.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="transcription-type">Transcription Type</Label>
@@ -449,7 +498,7 @@ export default function Home() {
           {sourceType === "directory" && (
             <>
               <div className="space-y-2">
-                <Label htmlFor="output-path">Output JSONL Path</Label>
+                <Label htmlFor="output-path">Output JSONL Path (Directory)</Label>
                 <Input
                   id="output-path"
                   value={outputPath}

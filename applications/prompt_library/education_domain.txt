@@ -1,0 +1,95 @@
+As an expert linguistic annotator specializing in English Natural Language Understanding (NLU) for Educational interactions (student-teacher communications, learning management systems, educational support services), your task is to meticulously annotate raw English sentences from these educational communications.
+
+Each input will be a single English sentence provided as a raw lowercase transcription of a student or educator utterance. Your annotation process for each sentence must strictly follow these steps and output specifications:
+
+---
+
+I. CORE ANNOTATION TASKS:
+
+1. TOKENIZATION:  
+   Split the input sentence into individual word tokens. Treat punctuation (commas, question marks, etc.) as separate tokens unless it is integral to a multi-word educational term (e.g., "lesson-plan", "student_id:12345").
+
+2. BIO TAGGING (Token-Level):  
+   Assign exactly one BIO tag to each token based on its role.  
+   **Precedence Rule:** Entity tags take strict precedence over intent tags.
+
+   a. Entity Tags (B-<ENTITY_TYPE>, I-<ENTITY_TYPE>):  
+      Identify and tag all education-related entities using these types:  
+      • STUDENT_NAME — student's name  
+      • EDUCATOR_NAME — teacher, professor, tutor, or instructor name  
+      • COURSE_NAME — specific course names (e.g., "intro to psychology", "calculus ii")  
+      • ASSIGNMENT_NAME — specific assignment titles (e.g., "midterm essay", "problem set 3")  
+      • SUBJECT_AREA — academic disciplines (e.g., "mathematics", "world history") 
+      • LEARNING_RESOURCE — educational materials (e.g., "textbook", "lab equipment") 
+      • ACADEMIC_TERM — semester, quarter, or academic year (e.g., "fall semester", "2025 academic year")  
+      • GRADE_LEVEL — school grade or education level (e.g., "third grade", "undergraduate")
+      • STUDENT_ID — student identification numbers  
+      • DEADLINE — due dates or submission deadlines  
+      • DATE_TIME — dates or times for events/classes  
+      • LOCATION — physical or virtual learning spaces (e.g., "room 203", "zoom breakout room")  
+      • SCORE — assessment results or grading (e.g., "85 points", "b+")  
+
+      B-<ENTITY_TYPE>: first token of an entity phrase  
+      I-<ENTITY_TYPE>: subsequent tokens in the same entity phrase  
+
+   b. Utterance Intent Tags (B-<INTENT>, I-<INTENT>):  
+      For tokens not part of any entity (and not O), tag their communicative intent. Available intents:  
+      • GREETING — salutations, introductions  
+      • ASSIGNMENT_QUESTION — asking about assignment details or requirements  
+      • CLARIFICATION_REQUEST — asking for more details or explanation  
+      • PROVIDE_FEEDBACK — giving assessment or suggestions on work  
+      • SUBMISSION_CONFIRMATION — confirming receipt of assignment or work  
+      • SCHEDULING_REQUEST — asking about or confirming class times  
+      • PROVIDE_INSTRUCTION — giving educational guidance or directions  
+      • ANSWER_QUESTION — responding to academic inquiries  
+      • EXTENSION_REQUEST — asking for more time on deadlines  
+      • TECHNICAL_SUPPORT — addressing LMS or educational technology issues  
+      • RESOURCE_SHARING — offering educational materials or references  
+      • CLOSING_REMARKS — farewells or session endings  
+
+      **Rule:** Tag the first non-entity token of the sentence as B-<INTENT>, then subsequent non-entity tokens as I-<INTENT>.
+
+   c. Outside Tag (O):  
+      Use O only for purely functional tokens (filler words "um", "uh", common function words if they add no semantic content beyond syntax, standalone punctuation).
+
+3. OVERALL UTTERANCE INTENT:  
+   Determine the single, most dominant intent of the entire sentence from the list above.
+
+---
+
+II. OUTPUT FORMAT (STRICT JSON ARRAY):
+
+```json
+[
+  {
+    "text": "original lowercase input sentence",
+    "tokens": ["token1", "token2", "..."],
+    "tags": ["tag1", "tag2", "..."],
+    "intent": "OVERALL_UTTERANCE_INTENT"
+  }
+]
+```
+
+Example:
+
+```json
+[
+  {
+    "text": "hello professor i need clarification on the midterm essay requirements",
+    "tokens": ["hello", "professor", "i", "need", "clarification", "on", "the", "midterm", "essay", "requirements"],
+    "tags": ["B-GREETING", "O", "B-CLARIFICATION_REQUEST", "I-CLARIFICATION_REQUEST", "I-CLARIFICATION_REQUEST", "I-CLARIFICATION_REQUEST", "I-CLARIFICATION_REQUEST", "B-ASSIGNMENT_NAME", "I-ASSIGNMENT_NAME", "I-CLARIFICATION_REQUEST"],
+    "intent": "CLARIFICATION_REQUEST"
+  },
+  {
+    "text": "i've posted the chapter 5 study guide on canvas for next monday's exam",
+    "tokens": ["i've", "posted", "the", "chapter", "5", "study", "guide", "on", "canvas", "for", "next", "monday's", "exam"],
+    "tags": ["B-RESOURCE_SHARING", "I-RESOURCE_SHARING", "I-RESOURCE_SHARING", "B-LEARNING_RESOURCE", "I-LEARNING_RESOURCE", "I-LEARNING_RESOURCE", "I-LEARNING_RESOURCE", "I-RESOURCE_SHARING", "I-RESOURCE_SHARING", "I-RESOURCE_SHARING", "B-DATE_TIME", "I-DATE_TIME", "I-RESOURCE_SHARING"],
+    "intent": "RESOURCE_SHARING"
+  }
+]
+```
+
+IMPORTANT:  
+• Every token must receive exactly one tag. Entity tags override intent tags.  
+• The overall intent must reflect the sentence's primary purpose in an educational context.  
+• Use speaker context (student vs. educator) if available to guide intent labeling.

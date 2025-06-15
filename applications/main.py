@@ -1,14 +1,11 @@
 # applications/main.py
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import uvicorn
 import os
 from config import logger
 from routes import router
-from fastapi import HTTPException
 
 
 # Initialize FastAPI app
@@ -28,22 +25,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files
-# Mount static files
-current_file_path = Path(__file__).parent
-static_dir = current_file_path / "static"
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-# Serve index.html
-@app.get("/", include_in_schema=False)
-async def serve_index():
-    """Serve the main HTML interface"""
-    index_html_path = current_file_path / "static" / "index.html"
-    if not index_html_path.is_file():
-        logger.error(f"HTML file not found at: {index_html_path}")
-        raise HTTPException(status_code=404, detail="index.html not found")
-    return FileResponse(index_html_path)
-
 # Include API routes
 app.include_router(router)
 
@@ -58,7 +39,7 @@ if __name__ == "__main__":
     
     logger.info(f"Starting FastAPI server for '{app_module_string}' on {host}:{port}...")
     logger.info(f"Log Level: {log_level.upper()}, Reload Mode: {'Enabled' if reload else 'Disabled'}")
-    logger.info(f"Docs: http://{host}:{port}/docs, UI: http://{host}:{port}/")
+    logger.info(f"API Docs: http://{host}:{port}/docs")
     
     uvicorn.run(
         app_module_string, 

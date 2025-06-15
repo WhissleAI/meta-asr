@@ -24,7 +24,7 @@ TARGET_SAMPLE_RATE = 16000
 
 # GCS Configuration
 # Removed: GOOGLE_APPLICATION_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_PATH")
-TEMP_DOWNLOAD_DIR = os.getenv("TEMP_DOWNLOAD_DIR", "d:/z-whissle/meta-asr/temp_gcs_downloads") # Default if not in .env
+TEMP_DOWNLOAD_DIR = os.getenv("TEMP_DOWNLOAD_DIR", "E:\Meta_asr\meta-asr/applications/temp") # Default if not in .env
 
 ENTITY_TYPES = [
     "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",
@@ -128,6 +128,7 @@ class GcsProcessRequest(BaseModel):
     user_id: str = PydanticField(..., description="Unique identifier for the user.", example="user_123")
     gcs_path: str = PydanticField(..., description="Full GCS path to the audio file (e.g., gs://bucket_name/path/to/audio.wav).", example="gs://your-bucket/audio.wav")
     model_choice: ModelChoice = PydanticField(..., description="The transcription model to use.")
+    output_jsonl_path: str = PydanticField(..., description="Absolute path for the output JSONL file where GCS processing results will be saved.", example="/path/to/output/gcs_results.jsonl") # New field
     annotations: Optional[List[str]] = PydanticField(
         None, description="List of annotations to include (age, gender, emotion, entity, intent).",
         example=["age", "gender", "emotion"]

@@ -1,8 +1,14 @@
 const PROMPT_FILE_NAMES = [
-  "2.5_pro_prompt.txt",
-  "o1_prompt.txt",
-  "o3_mini_prompt.txt",
-  "sonnet_4_prompt.txt",
+  "call-center.txt",
+  "educational-interaction.txt",
+  "healthcare.txt",
+  "soccer-commentry.txt",
+  "default.txt",
+  "debate-analysis.txt",
+  "news_interview.txt",
+  "fitness_expert.txt",
+  "universal_prompt.txt",
+
 ]; // Add more as needed
 
 export async function loadPrompts() {

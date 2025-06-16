@@ -1,7 +1,7 @@
 # applications/config.py# GCS Configuration
 # Removed: GOOGLE_APPLICATION_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_PATH")
 import os
-TEMP_DOWNLOAD_DIR = os.getenv("TEMP_DOWNLOAD_DIR", r"E:\Meta_asr\meta-asr\applications\temp") # Default if not in .envmport os
+TEMP_DOWNLOAD_DIR = os.getenv("TEMP_DOWNLOAD_DIR", r"E:\\Meta_asr\\meta-asr\\applications\\temp_gcs_downloads") # Changed default and used raw string
 from pathlib import Path
 import logging
 from dotenv import load_dotenv
@@ -26,7 +26,7 @@ TARGET_SAMPLE_RATE = 16000
 
 # GCS Configuration
 # Removed: GOOGLE_APPLICATION_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_PATH")
-TEMP_DOWNLOAD_DIR = os.getenv("TEMP_DOWNLOAD_DIR", "E:\Meta_asr\meta-asr\applications\temp") # Default if not in .env
+TEMP_DOWNLOAD_DIR = os.getenv("TEMP_DOWNLOAD_DIR", r"E:\\Meta_asr\\meta-asr\\applications\\temp_gcs_downloads") # Corrected: Used raw string and a slightly different default name to avoid confusion
 
 ENTITY_TYPES = [
     "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",

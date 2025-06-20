@@ -16,6 +16,7 @@ import { useEffect, useState, useRef } from "react"
 import { useSession } from "next-auth/react"
 import { initFastApiUserSession } from "@/utils/sessionManager"
 import { toast } from "sonner"
+import { AnnotationInstructions } from "../../components/AnnotationInstructions" // Added import
 
 interface ProcessResponse {
   message: string
@@ -167,8 +168,8 @@ export default function Home() {
       const endpoint = segmentLength // If segmentLength is set, use the new endpoint
         ? "/trim_audio_and_transcribe/"
         : transcriptionType === "annotated" && selectedAnnotations.length > 0
-        ? "/create_annotated_manifest/"
-        : "/create_transcription_manifest/"
+          ? "/create_annotated_manifest/"
+          : "/create_transcription_manifest/"
 
       try {
         const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}${endpoint}`, {
@@ -302,7 +303,7 @@ export default function Home() {
 
       // If fetchResponse.ok is true, then try to parse the successful response as JSON
       const resultData = await fetchResponse.json(); // This is the line (around 264) that might throw
-      
+
       toast.success("GCS File Processing Complete", { description: resultData.message || "Processing finished." });
       setResponse(resultData.data as GcsProcessingResult);
 
@@ -733,6 +734,8 @@ export default function Home() {
           </CardContent>
         </Card>
       )}
+
+      <AnnotationInstructions /> {/* Added the new component here */}
     </div>
   )
 }

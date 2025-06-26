@@ -492,26 +492,29 @@ async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
     except IOError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write output file: {e}")
 
+
+
 async def _process_single_downloaded_file(
     local_audio_path: Path,
     user_id: str,
     model_choice: ModelChoice,
     requested_annotations: Optional[List[str]],
     custom_prompt: Optional[str],
-    output_jsonl_path: Path, # New parameter
-    original_gcs_path: str # New parameter
+    output_jsonl_path: Path,
+    original_gcs_path: str
 ) -> Dict[str, Any]:
     """
     Processes a single downloaded audio file for transcription and optional annotation.
     Sends progress updates via WebSocket and returns a dictionary of results.
     """
-    results: Dict[str, Any] = { # Initialize results structure
+    results: Dict[str, Any] = {
         "duration": None, "transcription": None, "age_group": None, "gender": None,
         "emotion": None, "bio_annotation_gemini": None, "gemini_intent": None,
         "prompt_used": None, "error_details": [], "overall_error_summary": None
     }
     await websocket_manager.send_personal_message({"status": "processing_started", "detail": f"Processing file: {local_audio_path.name}"}, user_id)
 
+    # --- Duration ---
     try:
         await websocket_manager.send_personal_message({"status": "calculating_duration", "detail": "Calculating audio duration..."}, user_id)
         results["duration"] = await asyncio.to_thread(get_audio_duration, local_audio_path)
@@ -550,72 +553,159 @@ async def _process_single_downloaded_file(
                 await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": "Transcription returned no text."}, user_id)
             else:
                 results["transcription"] = transcription_text
-                await websocket_manager.send_personal_message({"status": "transcription_complete", "detail": "Transcription successful.", "data": {"transcription": transcription_text[:100] + "..." if transcription_text and len(transcription_text) > 100 else transcription_text}}, user_id)
+                await websocket_manager.send_personal_message({"status": "transcription_complete", "detail": "Transcription successful.", "data": {"transcription": transcription_text[:100] + "..." if len(transcription_text) > 100 else transcription_text}}, user_id)
         except Exception as e:
             logger.error(f"User {user_id} - Transcription failed for {local_audio_path.name} with {model_choice.value}: {e}", exc_info=True)
             err_msg = f"TranscriptionError: Unexpected error - {type(e).__name__}: {str(e)}"
             results["error_details"].append(err_msg)
             await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": err_msg}, user_id)
 
-    # --- Annotations (if transcription was successful and annotations requested) ---
+    # --- Annotations ---
     if transcription_text and requested_annotations:
         await websocket_manager.send_personal_message({"status": "annotation_started", "detail": "Starting annotations..."}, user_id)
-        # ... (rest of annotation logic from previous step, with added WebSocket messages for progress/completion/errors for each annotation type)
-        # For brevity, I'll show a conceptual placement for a Gemini annotation message.
-        # You would add similar messages for age/gender/emotion if they are run.
 
+        # Load audio for age/gender/emotion if needed
         audio_data: Optional[np.ndarray] = None
         sample_rate: Optional[int] = None
         needs_local_models = any(a in ["age", "gender", "emotion"] for a in requested_annotations)
-        
-        if needs_local_models:
-            # ... (audio loading logic)
-            pass # Add WS messages for audio loading status if it's slow
 
-        # Age/Gender and Emotion (Example for one part)
+        if needs_local_models:
+            await websocket_manager.send_personal_message({"status": "audio_loading", "detail": "Loading audio for age/gender/emotion..."}, user_id)
+            audio_data, sample_rate, load_err = await asyncio.to_thread(load_audio, local_audio_path)
+            if load_err:
+                results["error_details"].append(f"AudioLoadError: {load_err}")
+                await websocket_manager.send_personal_message({"status": "audio_load_failed", "detail": load_err}, user_id)
+            elif audio_data is None or sample_rate != TARGET_SAMPLE_RATE:
+                results["error_details"].append("AudioLoadError: Audio load failed or sample rate mismatch.")
+                await websocket_manager.send_personal_message({"status": "audio_load_failed", "detail": "Audio load failed or sample rate mismatch."}, user_id)
+            else:
+                await websocket_manager.send_personal_message({"status": "audio_load_complete", "detail": "Audio loaded successfully."}, user_id)
+
+        # Age/Gender and Emotion Processing
         if audio_data is not None and sample_rate == TARGET_SAMPLE_RATE:
+            tasks = []
             if "age" in requested_annotations or "gender" in requested_annotations:
                 await websocket_manager.send_personal_message({"status": "age_gender_started", "detail": "Processing age/gender..."}, user_id)
-                # ... (age/gender processing) ...
-                if results.get("age_group") or results.get("gender"):
-                    await websocket_manager.send_personal_message({"status": "age_gender_complete", "data": {"age": results.get("age_group"), "gender": results.get("gender")}}, user_id)
-                elif any("AgeGenderError" in e for e in results["error_details"]):
-                     await websocket_manager.send_personal_message({"status": "age_gender_failed", "detail": "Age/gender processing failed."}, user_id)
-            # Similar for emotion
+                if age_gender_model is None:
+                    results["error_details"].append("AgeGenderError: Age/Gender model not loaded.")
+                    await websocket_manager.send_personal_message({"status": "age_gender_failed", "detail": "Age/Gender model not loaded."}, user_id)
+                else:
+                    tasks.append(asyncio.to_thread(predict_age_gender, audio_data, TARGET_SAMPLE_RATE))
+
             if "emotion" in requested_annotations:
                 await websocket_manager.send_personal_message({"status": "emotion_started", "detail": "Processing emotion..."}, user_id)
-                # ... (emotion processing) ...
-                if results.get("emotion"):
-                    await websocket_manager.send_personal_message({"status": "emotion_complete", "data": {"emotion": results.get("emotion")}}, user_id)
-                elif any("EmotionError" in e for e in results["error_details"]):
-                    await websocket_manager.send_personal_message({"status": "emotion_failed", "detail": "Emotion processing failed."}, user_id)
-        
+                if emotion_model is None:
+                    results["error_details"].append("EmotionError: Emotion model not loaded.")
+                    await websocket_manager.send_personal_message({"status": "emotion_failed", "detail": "Emotion model not loaded."}, user_id)
+                else:
+                    tasks.append(asyncio.to_thread(predict_emotion, audio_data, TARGET_SAMPLE_RATE))
+
+            if tasks:
+                try:
+                    task_results = await asyncio.gather(*tasks, return_exceptions=True)
+                    for result in task_results:
+                        if isinstance(result, Exception):
+                            results["error_details"].append(f"AnnotationError: {type(result).__name__}")
+                            await websocket_manager.send_personal_message({"status": "annotation_failed", "detail": f"Annotation subtask error: {type(result).__name__}"}, user_id)
+                            continue
+
+                        if isinstance(result, tuple) and len(result) == 3:  # Age/Gender
+                            age_pred, gender_idx, age_gender_err = result
+                            if age_gender_err:
+                                results["error_details"].append(f"AgeGenderError: {age_gender_err}")
+                                await websocket_manager.send_personal_message({"status": "age_gender_failed", "detail": age_gender_err}, user_id)
+                            else:
+                                if "age" in requested_annotations and age_pred is not None:
+                                    actual_age = round(age_pred, 1)
+                                    age_brackets = [(18, "0-17"), (25, "18-24"), (35, "25-34"), (45, "35-44"), (55, "45-54"), (65, "55-64"), (float('inf'), "65+")]
+                                    age_group = "Unknown"
+                                    for threshold, bracket in age_brackets:
+                                        if actual_age < threshold:
+                                            age_group = bracket
+                                            break
+                                    results["age_group"] = age_group
+                                if "gender" in requested_annotations and gender_idx is not None:
+                                    gender_str = "Unknown"
+                                    if gender_idx == 1:
+                                        gender_str = "Male"
+                                    elif gender_idx == 0:
+                                        gender_str = "Female"
+                                    results["gender"] = gender_str
+                                await websocket_manager.send_personal_message({"status": "age_gender_complete", "data": {"age_group": results["age_group"], "gender": results["gender"]}}, user_id)
+
+                        elif isinstance(result, tuple) and len(result) == 2:  # Emotion
+                            emotion_label, emotion_err = result
+                            if emotion_err:
+                                results["error_details"].append(f"EmotionError: {emotion_err}")
+                                await websocket_manager.send_personal_message({"status": "emotion_failed", "detail": emotion_err}, user_id)
+                            elif "emotion" in requested_annotations and emotion_label is not None:
+                                results["emotion"] = emotion_label.replace("_", " ").title() if emotion_label != "SHORT_AUDIO" else "Short Audio"
+                                await websocket_manager.send_personal_message({"status": "emotion_complete", "data": {"emotion": results["emotion"]}}, user_id)
+                except Exception as e:
+                    logger.error(f"Error in A/G/E tasks: {e}")
+                    results["error_details"].append(f"AnnotationError: {type(e).__name__}: {e}")
+                    await websocket_manager.send_personal_message({"status": "annotation_failed", "detail": f"Annotation subtask error: {e}"}, user_id)
+
+        # Gemini Annotation
         requires_gemini_for_annotation = any(a in ["entity", "intent"] for a in requested_annotations)
         if requires_gemini_for_annotation:
-            await websocket_manager.send_personal_message({"status": "gemini_annotation_started", "detail": "Starting Gemini entity/intent annotation..."}, user_id)
-            # ... (Gemini annotation logic) ...
-            if results.get("bio_annotation_gemini") or results.get("gemini_intent"):
-                 await websocket_manager.send_personal_message({"status": "gemini_annotation_complete", "data": {"entities_tags_sample": results.get("bio_annotation_gemini"), "intent": results.get("gemini_intent")}}, user_id)
-            elif any("GeminiAnnotationError" in e for e in results["error_details"]):
-                await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": "Gemini annotation failed."}, user_id)
+            if not GEMINI_AVAILABLE:
+                results["error_details"].append("GeminiAnnotationError: Gemini SDK not available.")
+                await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": "Gemini SDK not available."}, user_id)
+            elif not get_user_api_key(user_id, "gemini"):
+                results["error_details"].append("GeminiAnnotationErrorError: Gemini API key not found or session expired.")
+                await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": "Gemini API key not found or session expired."}, user_id)
+            else:
+                await websocket_manager.send_personal_message({"status": "gemini_annotation_started", "detail": "Starting Gemini entity/intent annotation..."}, user_id)
+                try:
+                    tokens, tags, intent, gemini_err = await annotate_text_structured_with_gemini(
+                        transcription_text,
+                        custom_prompt=custom_prompt,
+                        user_id=user_id
+                    )
+                    if gemini_err:
+                        results["error_details"].append(f"GeminiAnnotationErrorError: {gemini_err}")
+                        await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": gemini_err}, user_id)
+                        if "intent" in requested_annotations:
+                            results["gemini_intent"] = "ANNOTATION_FAILED"
+                    else:
+                        results["prompt_used"] = custom_prompt if custom_prompt else "default_generated_prompt_behavior"
+                        if "entity" in requested_annotations and tokens and tags:
+                            results["bio_annotation_gemini"] = BioAnnotation(tokens=tokens, tags=tags).dict()
+                        if "intent" in requested_annotations and intent:
+                            results["gemini_intent"] = intent
+                        await websocket_manager.send_personal_message({
+                            "status": "gemini_annotation_complete",
+                            "data": {
+                                "bio_annotation_gemini": results["bio_annotation_gemini"],
+                                "gemini_intent": results["gemini_intent"],
+                                "prompt_used": results["prompt_used"]
+                            }
+                        }, user_id)
+                except Exception as e:
+                    logger.error(f"User {user_id} - Gemini annotation failed: {e}", exc_info=True)
+                    results["error_details"].append(f"GeminiAnnotationErrorError: {type(e).__name__}: {str(e)}")
+                    await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": f"Gemini annotation error: {e}"}, user_id)
+                    if "intent" in requested_annotations:
+                        results["gemini_intent"] = "ANNOTATION_FAILED"
 
-        await websocket_manager.send_personal_message({"status": "annotation_complete", "detail": "Annotations finished."}, user_id)
+        await websocket_manager.send_personal_message({"status": "annotation_complete", "detail": "All annotations finished."}, user_id)
 
     elif requested_annotations and not transcription_text:
-         err_msg = "AnnotationSkipped: Transcription failed or was empty, skipping annotations."
-         results["error_details"].append(err_msg)
-         await websocket_manager.send_personal_message({"status": "annotation_skipped", "detail": err_msg}, user_id)
+        err_msg = "AnnotationSkipped: Transcription failed or was empty, skipping annotations."
+        results["error_details"].append(err_msg)
+        await websocket_manager.send_personal_message({"status": "annotation_skipped", "detail": err_msg}, user_id)
 
+    # --- Save Results ---
     if results["error_details"]:
         results["overall_error_summary"] = "; ".join(results["error_details"])
         await websocket_manager.send_personal_message({"status": "processing_failed", "detail": results["overall_error_summary"], "data": results}, user_id)
     else:
         await websocket_manager.send_personal_message({"status": "processing_complete", "detail": "All processing finished successfully.", "data": results}, user_id)
-    
-    # Save to JSONL
+
     try:
         record_to_save = {
-            "audio_filepath": original_gcs_path, # Use original GCS path
+            "audio_filepath": original_gcs_path,
             "text": results.get("transcription"),
             "duration": results.get("duration"),
             "model_used_for_transcription": model_choice.value,
@@ -627,7 +717,6 @@ async def _process_single_downloaded_file(
             "prompt_used": results.get("prompt_used"),
             "error": results.get("overall_error_summary")
         }
-        # Filter out None values before saving
         final_record = {k: v for k, v in record_to_save.items() if v is not None}
 
         with open(output_jsonl_path, 'a', encoding='utf-8') as f_out:
@@ -638,14 +727,20 @@ async def _process_single_downloaded_file(
 
     except IOError as e:
         logger.error(f"User {user_id} - Failed to write GCS result to {output_jsonl_path}: {e}")
-        results["error_details"].append(f"Failed to save result: {e}")
+        results["error_details"].append(f"SaveError: {e}")
         results["overall_error_summary"] = "; ".join(results["error_details"])
         await websocket_manager.send_personal_message({"status": "save_failed", "detail": f"Failed to save result to {output_jsonl_path.name}"}, user_id)
     except Exception as e:
         logger.error(f"User {user_id} - Unexpected error saving GCS result to {output_jsonl_path}: {e}", exc_info=True)
-        results["error_details"].append(f"Unexpected error saving result: {e}")
+        results["error_details"].append(f"SaveError: Unexpected error - {type(e).__name__}: {e}")
         results["overall_error_summary"] = "; ".join(results["error_details"])
         await websocket_manager.send_personal_message({"status": "save_failed", "detail": f"Unexpected error saving result to {output_jsonl_path.name}"}, user_id)
+
+    # Cleanup
+    # del audio_data
+    # gc.collect()
+    # if torch.cuda.is_available():
+    #     torch.cuda.empty_cache()
 
     return results
 

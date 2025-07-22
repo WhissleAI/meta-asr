@@ -64,7 +64,7 @@ export default function Home() {
     entity: false,
     intent: false,
   })
-  const [prompts, setPrompts] = useState<string[]>([])
+  const [prompts, setPrompts] = useState<{ file: string; displayName: string; content: string }[]>([])
   const [selectedPrompt, setSelectedPrompt] = useState("")
   const [customPrompt, setCustomPrompt] = useState("")
   const [response, setResponse] = useState<ProcessResponse | GcsProcessingResult | null>(null)
@@ -86,10 +86,13 @@ export default function Home() {
   useEffect(() => {
     loadPrompts()
       .then((loadedPrompts) => {
-        const promptContents = loadedPrompts.map((prompt) => prompt.content)
-        setPrompts(promptContents)
-        setSelectedPrompt(promptContents[0] || "")
-        setCustomPrompt(promptContents[0] || "")
+        setPrompts(loadedPrompts.map(({ displayName, name, content }) => ({
+          displayName,
+          file: name,
+          content: content || "", // Ensure content is always a string
+        })))
+        setSelectedPrompt(loadedPrompts[0]?.displayName || "")
+        setCustomPrompt(loadedPrompts[0]?.content || "")
       })
       .catch((err) => {
         console.error("Failed to load prompts:", err)
@@ -395,8 +398,11 @@ export default function Home() {
                 setModelChoice("gemini")
                 if (value === "simple") {
                   setAnnotations({ age: false, gender: false, emotion: false, entity: false, intent: false })
-                  setSelectedPrompt(prompts[0] || "")
-                  setCustomPrompt(prompts[0] || "")
+                  setSelectedPrompt(prompts[0]?.displayName || "")
+                  setCustomPrompt(prompts[0]?.content || "")
+                } else if (value === "annotated") {
+                  setSelectedPrompt(prompts[0]?.displayName || "")
+                  setCustomPrompt(prompts[0]?.content || "")
                 }
               }}
               disabled={isLoading}
@@ -463,7 +469,7 @@ export default function Home() {
                   value={selectedPrompt}
                   onValueChange={(value) => {
                     setSelectedPrompt(value)
-                    setCustomPrompt(value)
+                    setCustomPrompt(prompts.find((p) => p.displayName === value)?.content || "")
                   }}
                   disabled={isLoading}
                 >
@@ -471,9 +477,9 @@ export default function Home() {
                     <SelectValue placeholder="Select a prompt" />
                   </SelectTrigger>
                   <SelectContent>
-                    {prompts.map((prompt, index) => (
-                      <SelectItem key={index} value={prompt} className="truncate max-w-xs break-words">
-                        {prompt.length > 50 ? `${prompt.slice(0, 47)}...` : prompt}
+                    {prompts.map((prompt) => (
+                      <SelectItem key={prompt.file} value={prompt.displayName} className="truncate max-w-xs break-words">
+                        {prompt.displayName}
                       </SelectItem>
                     ))}
                   </SelectContent>

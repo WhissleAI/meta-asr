@@ -406,6 +406,255 @@ async def trim_audio_and_transcribe_endpoint(process_request: ProcessRequest):
 
 
 
+
+# trim transcribe_annotate_endpoint
+@router.post("/trim_transcribe_annotate/", response_model=ProcessResponse, summary="Trim Audio, Transcribe, and Optionally Annotate")
+async def trim_transcribe_annotate_endpoint(process_request: ProcessRequest):
+    """
+    Trims audio files into segments, transcribes them using the selected model, and optionally annotates
+    transcriptions with BIO tags and intent using Gemini. Stores results in a JSONL file.
+    
+    Args:
+        process_request: Contains user_id, directory_path, optional output_jsonl_path, model_choice,
+                         segment_length_sec, optional annotations list, and optional custom prompt.
+    
+    Returns:
+        ProcessResponse with processing statistics and output file path.
+    
+    Raises:
+        HTTPException: For invalid session, unavailable services, missing API keys, or file I/O errors.
+    """
+    user_id = process_request.user_id
+    if not is_user_session_valid(user_id):
+        raise HTTPException(status_code=401, detail="User session is invalid or expired. Please re-initialize session.")
+
+    model_choice = process_request.model_choice
+    provider_name = model_choice.value
+    segment_length_sec = process_request.segment_length_sec
+
+    if not segment_length_sec or segment_length_sec <= 0:
+        raise HTTPException(status_code=400, detail="Invalid segment length provided.")
+    segment_length_ms = segment_length_sec * 1000
+
+    # Check transcription service availability and user key
+    transcription_service_available = {
+        ModelChoice.whissle: WHISSLE_AVAILABLE,
+        ModelChoice.gemini: GEMINI_AVAILABLE,
+        ModelChoice.deepgram: DEEPGRAM_AVAILABLE
+    }.get(model_choice, False)
+    
+    if not transcription_service_available:
+        raise HTTPException(status_code=400, detail=f"{provider_name.capitalize()} SDK is not available on the server.")
+    
+    if not get_user_api_key(user_id, provider_name):
+        raise HTTPException(status_code=400, detail=f"API key for {provider_name.capitalize()} not found or session expired.")
+
+    # Check Gemini availability for annotation if needed
+    requires_gemini_for_annotation = process_request.annotations and any(a in ["entity", "intent"] for a in process_request.annotations)
+    if requires_gemini_for_annotation:
+        if not GEMINI_AVAILABLE:
+            raise HTTPException(status_code=400, detail="Gemini SDK for annotation is not available on the server.")
+        if not get_user_api_key(user_id, "gemini"):
+            raise HTTPException(status_code=400, detail="Gemini API key for annotation not found or session expired.")
+
+    needs_age_gender = process_request.annotations and any(a in ["age", "gender"] for a in process_request.annotations)
+    needs_emotion = process_request.annotations and "emotion" in process_request.annotations
+
+    dir_path, output_jsonl_path = validate_paths(process_request.directory_path, process_request.output_jsonl_path)
+    original_audio_files = discover_audio_files(dir_path)
+
+    if not original_audio_files:
+        output_jsonl_path = dir_path / "transcriptions.jsonl"
+        try:
+            with open(output_jsonl_path, "w", encoding="utf-8") as _: pass
+        except IOError as e:
+            raise HTTPException(status_code=500, detail=f"Failed to create empty output file: {e}")
+        return ProcessResponse(
+            message="No audio files found in the directory.",
+            output_file=str(output_jsonl_path),
+            processed_files=0,
+            saved_records=0,
+            errors=0
+        )
+
+    processed_files_count = 0
+    saved_records_count = 0
+    error_count = 0
+    trimmed_audio_base_dir = dir_path / "trimmed_segments"
+    trimmed_audio_base_dir.mkdir(parents=True, exist_ok=True)
+
+    for audio_file in original_audio_files:
+        try:
+            # Create a unique subdirectory for each original file's segments and transcriptions
+            file_specific_dir = trimmed_audio_base_dir / audio_file.stem
+            file_specific_dir.mkdir(parents=True, exist_ok=True)
+            output_jsonl_path = file_specific_dir / "transcriptions.jsonl"
+
+            # Trim audio
+            trimmed_segments = await asyncio.to_thread(trim_audio, audio_file, segment_length_ms, file_specific_dir)
+            if not trimmed_segments:
+                logger.warning(f"No segments created for {audio_file.name}")
+                error_count += 1
+                continue
+
+            # Process segments (transcription and optional annotation)
+            with open(output_jsonl_path, "w", encoding="utf-8") as outfile:
+                for audio_segment_path in trimmed_segments:
+                    file_error_details: List[str] = []
+                    record_data: Dict[str, Any] = {
+                        "audio_filepath": str(audio_segment_path.resolve()),
+                        "task_name": "NER" if requires_gemini_for_annotation else "TRANSCRIPTION"
+                    }
+                    logger.info(f"--- Processing segment {audio_segment_path.name} for user {user_id} ---")
+                    processed_files_count += 1
+
+                    # Get audio duration
+                    duration = get_audio_duration(audio_segment_path)
+                    record_data["duration"] = duration
+
+                    # Load audio for age/gender/emotion if needed
+                    audio_data: Optional[np.ndarray] = None
+                    sample_rate: Optional[int] = None
+                    if needs_age_gender or needs_emotion:
+                        audio_data, sample_rate, load_err = load_audio(audio_segment_path)
+                        if load_err:
+                            file_error_details.append(load_err)
+                        elif audio_data is None or (sample_rate != TARGET_SAMPLE_RATE if sample_rate is not None else True):
+                            file_error_details.append("Audio load/SR mismatch for A/G/E.")
+
+                    # Transcribe segment
+                    transcription_text: Optional[str] = None
+                    transcription_error: Optional[str] = None
+                    try:
+                        if model_choice == ModelChoice.whissle:
+                            transcription_text, transcription_error = await transcribe_with_whissle_single(audio_segment_path, user_id)
+                        elif model_choice == ModelChoice.gemini:
+                            transcription_text, transcription_error = await transcribe_with_gemini_single(audio_segment_path, user_id)
+                        elif model_choice == ModelChoice.deepgram:
+                            transcription_text, transcription_error = await transcribe_with_deepgram_single(audio_segment_path, user_id)
+                        else:
+                            transcription_error = "Invalid model choice for transcription."
+                        
+                        if transcription_error:
+                            file_error_details.append(f"Transcription: {transcription_error}")
+                        elif transcription_text is None:
+                            file_error_details.append("Transcription returned None without an error.")
+                    
+                    except Exception as e:
+                        logger.error(f"Unexpected error transcribing {audio_segment_path.name}: {e}", exc_info=True)
+                        file_error_details.append(f"Transcription error: {type(e).__name__}: {e}")
+
+                    record_data["original_transcription"] = transcription_text
+                    record_data["text"] = transcription_text  # May be overwritten by annotation
+
+                    # Age/Gender and Emotion processing
+                    if (needs_age_gender or needs_emotion) and audio_data is not None and sample_rate == TARGET_SAMPLE_RATE:
+                        tasks = []
+                        if needs_age_gender and 'age_gender_model' in globals():
+                            tasks.append(asyncio.to_thread(predict_age_gender, audio_data, TARGET_SAMPLE_RATE))
+                        if needs_emotion and 'emotion_model' in globals():
+                            tasks.append(asyncio.to_thread(predict_emotion, audio_data, TARGET_SAMPLE_RATE))
+                        
+                        if tasks:
+                            results = await asyncio.gather(*tasks, return_exceptions=True)
+                            for result_item in results:
+                                if isinstance(result_item, Exception):
+                                    logger.error(f"Error in A/G/E sub-task: {result_item}", exc_info=False)
+                                    file_error_details.append(f"A_G_E_SubtaskError: {type(result_item).__name__}")
+                                    continue
+                                
+                                if isinstance(result_item, tuple) and len(result_item) == 3:  # Age/Gender
+                                    age_pred, gender_idx, age_gender_err = result_item
+                                    if age_gender_err:
+                                        file_error_details.append(f"A/G_WARN: {age_gender_err}")
+                                    else:
+                                        if process_request.annotations and "age" in process_request.annotations and age_pred is not None:
+                                            actual_age = round(age_pred, 1)
+                                            age_brackets = [(18, "0-17"), (25, "18-24"), (35, "25-34"), (45, "35-44"), (55, "45-54"), (65, "55-64"), (float('inf'), "65+")]
+                                            age_group = "Unknown"
+                                            for threshold, bracket in age_brackets:
+                                                if actual_age < threshold:
+                                                    age_group = bracket
+                                                    break
+                                            record_data["age_group"] = age_group
+                                        if process_request.annotations and "gender" in process_request.annotations and gender_idx is not None:
+                                            gender_str = "Unknown"
+                                            if gender_idx == 1:
+                                                gender_str = "Male"
+                                            elif gender_idx == 0:
+                                                gender_str = "Female"
+                                            record_data["gender"] = gender_str
+                                elif isinstance(result_item, tuple) and len(result_item) == 2:  # Emotion
+                                    emotion_label, emotion_err = result_item
+                                    if emotion_err:
+                                        file_error_details.append(f"EMO_WARN: {emotion_err}")
+                                    elif process_request.annotations and "emotion" in process_request.annotations and emotion_label is not None:
+                                        record_data["emotion"] = emotion_label.replace("_", " ").title() if emotion_label != "SHORT_AUDIO" else "Short Audio"
+
+                    # Gemini Annotation for BIO tags and intent
+                    if requires_gemini_for_annotation and transcription_text and transcription_text.strip():
+                        prompt_type_for_gemini = process_request.prompt or None  # Use custom prompt if provided
+                        tokens, tags, intent, gemini_anno_err = await annotate_text_structured_with_gemini(
+                            transcription_text,
+                            prompt_type_for_gemini, 
+                            user_id,
+                            
+                        )
+
+                        if gemini_anno_err:
+                            file_error_details.append(f"GEMINI_ANNOTATION_FAIL: {gemini_anno_err}")
+                            if process_request.annotations and "intent" in process_request.annotations:
+                                record_data["gemini_intent"] = "ANNOTATION_FAILED"
+                        else:
+                            if process_request.annotations and "entity" in process_request.annotations and tokens and tags:
+                                record_data["bio_annotation_gemini"] = BioAnnotation(tokens=tokens, tags=tags)
+                            if process_request.annotations and "intent" in process_request.annotations and intent:
+                                record_data["gemini_intent"] = intent
+                            record_data["prompt_used"] = prompt_type_for_gemini[:100] if prompt_type_for_gemini else "default_generated_prompt_behavior"
+
+                    elif requires_gemini_for_annotation and (not transcription_text or not transcription_text.strip()):
+                        if process_request.annotations and "intent" in process_request.annotations:
+                            record_data["gemini_intent"] = "NO_SPEECH_FOR_ANNOTATION"
+
+                    # Save record
+                    final_error_msg = "; ".join(file_error_details) if file_error_details else None
+                    record_data["error"] = final_error_msg
+                    try:
+                        record = AnnotatedJsonlRecord(**record_data)
+                        outfile.write(record.model_dump_json(exclude_none=True) + "\n")
+                        if not final_error_msg:
+                            saved_records_count += 1
+                        else:
+                            error_count += 1
+                    except Exception as write_e:
+                        logger.error(f"Failed to write record for {audio_segment_path.name}: {write_e}", exc_info=True)
+                        file_error_details.append(f"JSONL write error: {write_e}")
+                        record_data["error"] = "; ".join(file_error_details) if file_error_details else write_e
+                        error_count += 1
+                        outfile.write(json.dumps(record_data, ensure_ascii=False) + "\n")
+                    
+                    del audio_data
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
+        except Exception as e:
+            logger.error(f"Error processing {audio_file.name}: {e}", exc_info=True)
+            error_count += 1
+
+    final_message = (
+        f"Processed {processed_files_count} audio segments across {len(original_audio_files)} files. "
+        f"Saved {saved_records_count} records successfully. Errors: {error_count}."
+    )
+    return ProcessResponse(
+        message=final_message,
+        output_file=str(trimmed_audio_base_dir),
+        processed_files=processed_files_count,
+        saved_records=saved_records_count,
+        errors=error_count
+    )
+
+
 # only for annotated manifest
 @router.post("/create_annotated_manifest/", response_model=ProcessResponse, summary="Create Annotated Manifest")
 async def create_annotated_manifest_endpoint(process_request: ProcessRequest):

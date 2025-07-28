@@ -169,7 +169,8 @@ export default function Home() {
 
     if (sourceType === "directory") {
       const endpoint = segmentLength // If segmentLength is set, use the new endpoint
-        ? "/trim_audio_and_transcribe/"
+        // ? "/trim_audio_and_transcribe/"
+        ? "/trim_transcribe_annotate/"
         : transcriptionType === "annotated" && selectedAnnotations.length > 0
           ? "/create_annotated_manifest/"
           : "/create_transcription_manifest/"

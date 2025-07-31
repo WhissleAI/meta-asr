@@ -1,0 +1,95 @@
+As an expert linguistic annotator specializing in English Natural Language Understanding (NLU) for Healthcare and Wellness content (health advice, wellness practices, fitness guidance, nutritional information), your task is to meticulously annotate raw English sentences from these health-related communications.
+
+Each input will be a single English sentence provided as a raw lowercase transcription from health and wellness content. Your annotation process for each sentence must strictly follow these steps and output specifications:
+
+---
+
+I. CORE ANNOTATION TASKS:
+
+1. TOKENIZATION:  
+   Split the input sentence into individual word tokens. Treat punctuation (commas, question marks, etc.) as separate tokens unless it is integral to a multi-word health term (e.g., "vitamin-d", "body-mass-index").
+
+2. BIO TAGGING (Token-Level):  
+   Assign exactly one BIO tag to each token based on its role.  
+   **Precedence Rule:** Entity tags take strict precedence over intent tags.
+
+   a. Entity Tags (B-<ENTITY_TYPE>, I-<ENTITY_TYPE>):  
+      Identify and tag all health and wellness-related entities using these types:  
+      • BODY_PART — specific parts of the human body (e.g., "lower back", "heart", "immune system")  
+      • NUTRIENT — vitamins, minerals, macronutrients (e.g., "protein", "vitamin c", "omega-3")  
+      • ACTIVITY — physical exercises or wellness practices (e.g., "meditation", "cardio", "strength training")  
+      • CONDITION — health states or issues (e.g., "stress", "high blood pressure", "inflammation")  
+      • FOOD_ITEM — specific foods or food groups (e.g., "leafy greens", "salmon", "whole grains")  
+      • METRIC — measurable health indicators (e.g., "heart rate", "sleep quality", "step count")  
+      • TIMEFRAME — duration or frequency recommendations (e.g., "30 minutes", "twice daily", "8 hours")  
+      • BENEFIT — positive outcomes of practices (e.g., "improved circulation", "weight management")  
+      • RISK_FACTOR — elements that may negatively impact health (e.g., "sedentary lifestyle", "processed foods")  
+      • SUPPLEMENT — health supplements or remedies (e.g., "fish oil", "probiotics")  
+      • TECHNIQUE — specific methods or approaches (e.g., "proper form", "mindful breathing")  
+      • PROFESSIONAL — references to health professionals (e.g., "nutritionist", "physical therapist")  
+
+      B-<ENTITY_TYPE>: first token of an entity phrase  
+      I-<ENTITY_TYPE>: subsequent tokens in the same entity phrase  
+
+   b. Utterance Intent Tags (B-<INTENT>, I-<INTENT>):  
+      For tokens not part of any entity (and not O), tag their communicative intent. Available intents:  
+      • RECOMMENDATION — suggesting specific actions or practices  
+      • EXPLANATION — providing information or clarification on health concepts  
+      • WARNING — cautioning against harmful practices or risks  
+      • MOTIVATION — encouraging healthy behaviors or adherence  
+      • INSTRUCTION — giving step-by-step guidance on performing activities  
+      • BENEFIT_STATEMENT — highlighting positive outcomes of behaviors  
+      • COMPARISON — contrasting different approaches or methods  
+      • QUESTION_PROMPT — asking for self-reflection or assessment  
+      • MYTH_CORRECTION — addressing misconceptions about health  
+      • SCIENTIFIC_CLAIM — presenting research-based health information  
+      • PERSONAL_TESTIMONY — sharing anecdotal health experiences  
+      • GENERAL_WELLNESS — broader statements about overall health  
+
+      **Rule:** Tag the first non-entity token of the sentence as B-<INTENT>, then subsequent non-entity tokens as I-<INTENT>.
+
+   c. Outside Tag (O):  
+      Use O only for purely functional tokens (filler words "um", "uh", common function words if they add no semantic content beyond syntax, standalone punctuation).
+
+3. OVERALL UTTERANCE INTENT:  
+   Determine the single, most dominant intent of the entire sentence from the list above.
+
+---
+
+II. OUTPUT FORMAT (STRICT JSON ARRAY):
+
+```json
+[
+  {
+    "text": "original lowercase input sentence",
+    "tokens": ["token1", "token2", "..."],
+    "tags": ["tag1", "tag2", "..."],
+    "intent": "OVERALL_UTTERANCE_INTENT"
+  }
+]
+```
+
+Example:
+
+```json
+[
+  {
+    "text": "incorporate at least 30 minutes of moderate cardio exercise five days a week to improve your heart health",
+    "tokens": ["incorporate", "at", "least", "30", "minutes", "of", "moderate", "cardio", "exercise", "five", "days", "a", "week", "to", "improve", "your", "heart", "health"],
+    "tags": ["B-RECOMMENDATION", "I-RECOMMENDATION", "I-RECOMMENDATION", "B-TIMEFRAME", "I-TIMEFRAME", "I-RECOMMENDATION", "I-RECOMMENDATION", "B-ACTIVITY", "I-ACTIVITY", "B-TIMEFRAME", "I-TIMEFRAME", "I-TIMEFRAME", "I-TIMEFRAME", "I-RECOMMENDATION", "I-RECOMMENDATION", "I-RECOMMENDATION", "B-BODY_PART", "I-RECOMMENDATION"],
+    "intent": "RECOMMENDATION"
+  },
+  {
+    "text": "chronic inflammation in the body can be reduced by consuming foods rich in omega-3 fatty acids such as salmon and walnuts",
+    "tokens": ["chronic", "inflammation", "in", "the", "body", "can", "be", "reduced", "by", "consuming", "foods", "rich", "in", "omega-3", "fatty", "acids", "such", "as", "salmon", "and", "walnuts"],
+    "tags": ["B-CONDITION", "I-CONDITION", "I-EXPLANATION", "I-EXPLANATION", "B-BODY_PART", "B-EXPLANATION", "I-EXPLANATION", "I-EXPLANATION", "I-EXPLANATION", "I-EXPLANATION", "I-EXPLANATION", "I-EXPLANATION", "I-EXPLANATION", "B-NUTRIENT", "I-NUTRIENT", "I-NUTRIENT", "I-EXPLANATION", "I-EXPLANATION", "B-FOOD_ITEM", "I-EXPLANATION", "B-FOOD_ITEM"],
+    "intent": "EXPLANATION"
+  }
+]
+```
+
+IMPORTANT:  
+• Every token must receive exactly one tag. Entity tags override intent tags.  
+• The overall intent must reflect the sentence's primary purpose in a health and wellness context.  
+• Pay special attention to differentiating between general advice versus specific instructions.
+

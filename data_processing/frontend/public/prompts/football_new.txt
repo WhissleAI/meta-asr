@@ -1,0 +1,53 @@
+You are an expert linguistic annotator specializing in English Natural Language Understanding (NLU) for football content. Your task is to annotate a pre-tokenized list of words from a football-related sentence (e.g., match commentary, highlights) with BIO tags and identify the overall utterance intent, following the guidelines below.
+
+**Guidelines**:
+
+1. **BIO Tagging (Token-Level)**:
+   - For each token in the provided list, assign *exactly one* BIO tag (Beginning, Inside, Outside) based on its role.
+   - **Precedence Rule**: Entity tags take strict precedence over intent tags.
+   - **Entity Tags** (`B-<ENTITY_TYPE>`, `I-<ENTITY_TYPE>`):
+     - Use for football-related entities:
+       - `PLAYER_NAME`: Individual player names (e.g., "Cristiano Ronaldo", "Mbappe")
+       - `TEAM_NAME`: Football club or national team names (e.g., "Manchester United", "Brazil")
+       - `STADIUM_NAME`: Stadium or venue names (e.g., "Old Trafford", "Wembley")
+       - `COMPETITION_NAME`: Tournament, league, or cup names (e.g., "Premier League", "World Cup")
+       - `MATCH_ACTION`: Specific football actions (e.g., "goal", "penalty", "corner kick", "offside")
+       - `POSITION`: Player positions (e.g., "striker", "goalkeeper", "midfielder")
+       - `TIME_REFERENCE`: Match time references (e.g., "45th minute", "stoppage time", "half-time")
+       - `SCORE`: Match scores or scorelines (e.g., "2-1", "nil-nil")
+       - `MANAGER_NAME`: Coach or manager names (e.g., "Pep Guardiola", "Jurgen Klopp")
+       - `MATCH_RESULT`: Match outcomes (e.g., "victory", "defeat", "draw")
+     - `B-<ENTITY_TYPE>`: For the *first token* of an entity phrase.
+     - `I-<ENTITY_TYPE>`: For *subsequent tokens* within the same entity phrase.
+   - **Utterance Intent Tags** (`B-<UTTERANCE_INTENT>`, `I-<UTTERANCE_INTENT>`):
+     - Apply to tokens that are *not* part of any entity and are *not* `O`.
+     - Available intent types:
+       - `DESCRIBE_ACTION`: Describing events on the pitch.
+       - `ANALYZE_PLAY`: Tactical analysis or play breakdown.
+       - `PROVIDE_STATISTICS`: Sharing match or player statistics.
+       - `PREDICT_OUTCOME`: Predicting match results.
+       - `COMPARE_PERFORMANCE`: Comparing players, teams, or performances.
+       - `HIGHLIGHT_MOMENT`: Emphasizing key moments or events.
+       - `PROVIDE_CONTEXT`: Giving background information or context.
+       - `EXPRESS_EXCITEMENT`: Showing enthusiasm or emotion.
+     - **Rule**: The *first non-entity, non-O token* in the sequence gets `B-<UTTERANCE_INTENT>`. Subsequent non-entity, non-O tokens get `I-<UTTERANCE_INTENT>`.
+   - **Outside Tag** (`O`):
+     - Use *only* for purely functional or syntactic tokens with no specific semantic meaning (e.g., standalone punctuation, filler words).
+
+2. **Overall Utterance Intent**:
+   - Identify the *single, most dominant* intent of the sentence from the intent types above, based on the provided tokens.
+
+**Input**:
+- A pre-tokenized list of words: {tokens}
+
+**Output**:
+- Return a JSON object with:
+  - `"tags"`: A list of BIO tags, one for each input token, in the same order.
+  - `"intent"`: A string representing the dominant utterance intent (uppercase).
+- Example for tokens ["messi", "scores", "a", "brilliant", "goal", "in", "the", "89th", "minute", "for", "barcelona"]:
+{
+"tags": ["B-PLAYER_NAME", "B-DESCRIBE_ACTION", "I-DESCRIBE_ACTION", "I-DESCRIBE_ACTION", "B-MATCH_ACTION", "I-DESCRIBE_ACTION", "I-DESCRIBE_ACTION", "B-TIME_REFERENCE", "I-TIME_REFERENCE", "I-DESCRIBE_ACTION", "B-TEAM_NAME"],
+"intent": "DESCRIBE_ACTION"
+}
+- Ensure the number of tags matches the number of tokens. If unsure, assign `O` to ambiguous tokens.
+- Return the JSON object and nothing else.

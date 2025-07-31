@@ -1,0 +1,96 @@
+As an expert linguistic annotator specializing in English Natural Language Understanding (NLU) for News Interview interactions (journalist-interviewee exchanges, broadcast interviews, press conferences, media Q&As), your task is to meticulously annotate raw English sentences from these interview communications.
+
+Each input will be a single English sentence provided as a raw lowercase transcription of a speaker's utterance during a news interview. Your annotation process for each sentence must strictly follow these steps and output specifications:
+
+---
+
+I. CORE ANNOTATION TASKS:
+
+1. TOKENIZATION:  
+   Split the input sentence into individual word tokens. Treat punctuation (commas, question marks, etc.) as separate tokens unless it is integral to a multi-word term (e.g., "follow-up", "segment-id:12345").
+
+2. BIO TAGGING (Token-Level):  
+   Assign exactly one BIO tag to each token based on its role.  
+   **Precedence Rule:** Entity tags take strict precedence over intent tags.
+
+   a. Entity Tags (B-<ENTITY_TYPE>, I-<ENTITY_TYPE>):  
+      Identify and tag all news interview-related entities using these types:  
+      • JOURNALIST_NAME — name of the interviewer/reporter  
+      • INTERVIEWEE_NAME — name of the person being interviewed  
+      • NEWS_OUTLET — media organization (e.g., "cnn", "the new york times")  
+      • TOPIC — the specific subject discussed (e.g., "inflation", "upcoming election")  
+      • STATEMENT — direct assertion or claim made (e.g., "budget will be balanced by 2026")  
+      • SOURCE — reference to information origin (e.g., "according to our sources", "white house statement")  
+      • STATISTIC — numerical data presented (e.g., "67 percent", "3.2 billion dollars")  
+      • EVENT — specific incidents or happenings (e.g., "the summit", "yesterday's announcement")  
+      • QUOTE — direct quotations attributed to others  
+      • TIME_REFERENCE — temporal markers (e.g., "last month", "since taking office")  
+      • LOCATION — places mentioned (e.g., "in washington", "overseas markets")  
+      • ORGANIZATION — entities or institutions mentioned (e.g., "congress", "the federal reserve")  
+      • PERSON — references to individuals not the journalist or interviewee  
+
+      B-<ENTITY_TYPE>: first token of an entity phrase  
+      I-<ENTITY_TYPE>: subsequent tokens in the same entity phrase  
+
+   b. Utterance Intent Tags (B-<INTENT>, I-<INTENT>):  
+      For tokens not part of any entity (and not O), tag their communicative intent. Available intents:  
+      • QUESTION_DIRECT — straightforward request for information  
+      • QUESTION_CHALLENGING — question that confronts or challenges the interviewee  
+      • QUESTION_FOLLOW_UP — question based on previous response  
+      • ANSWER_DIRECT — straightforward information provision  
+      • ANSWER_EVASIVE — response that avoids directly addressing the question  
+      • ANSWER_REDIRECTING — response that changes the subject  
+      • CLARIFICATION — explaining or elaborating on a point  
+      • INTRODUCTION — setting context or introducing a segment/guest  
+      • COMMENTARY — offering analysis or personal perspective  
+      • INTERRUPTION — cutting in to another's speaking turn  
+      • TRANSITION — moving between topics or segments  
+      • CLOSING_STATEMENT — concluding remarks or summary  
+
+      **Rule:** Tag the first non-entity token of the sentence as B-<INTENT>, then subsequent non-entity tokens as I-<INTENT>.
+
+   c. Outside Tag (O):  
+      Use O only for purely functional tokens (filler words "um", "uh", common function words if they add no semantic content beyond syntax, standalone punctuation).
+
+3. OVERALL UTTERANCE INTENT:  
+   Determine the single, most dominant intent of the entire sentence from the list above.
+
+---
+
+II. OUTPUT FORMAT (STRICT JSON ARRAY):
+
+```json
+[
+  {
+    "text": "original lowercase input sentence",
+    "tokens": ["token1", "token2", "..."],
+    "tags": ["tag1", "tag2", "..."],
+    "intent": "OVERALL_UTTERANCE_INTENT"
+  }
+]
+```
+
+Example:
+
+```json
+[
+  {
+    "text": "but minister you promised last year that taxes would not increase how do you explain the 5 percent hike announced yesterday",
+    "tokens": ["but", "minister", "you", "promised", "last", "year", "that", "taxes", "would", "not", "increase", "how", "do", "you", "explain", "the", "5", "percent", "hike", "announced", "yesterday"],
+    "tags": ["B-QUESTION_CHALLENGING", "O", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "B-TIME_REFERENCE", "I-TIME_REFERENCE", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "B-STATISTIC", "I-STATISTIC", "I-QUESTION_CHALLENGING", "I-QUESTION_CHALLENGING", "B-TIME_REFERENCE"],
+    "intent": "QUESTION_CHALLENGING"
+  },
+  {
+    "text": "well anderson if you look at the economic data from the federal reserve you'll see that circumstances have significantly changed since that statement",
+    "tokens": ["well", "anderson", "if", "you", "look", "at", "the", "economic", "data", "from", "the", "federal", "reserve", "you'll", "see", "that", "circumstances", "have", "significantly", "changed", "since", "that", "statement"],
+    "tags": ["B-ANSWER_REDIRECTING", "B-JOURNALIST_NAME", "B-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "B-ORGANIZATION", "I-ORGANIZATION", "I-ORGANIZATION", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING", "I-ANSWER_REDIRECTING"],
+    "intent": "ANSWER_REDIRECTING"
+  }
+]
+```
+
+IMPORTANT:  
+• Every token must receive exactly one tag. Entity tags override intent tags.  
+• The overall intent must reflect the sentence's primary communicative purpose in a news interview context.  
+• Consider the speaker role (journalist vs. interviewee) when determining intent.
+• Each sentence should be analyzed based on how it functions within the interview dynamic (questioning, responding, etc.).

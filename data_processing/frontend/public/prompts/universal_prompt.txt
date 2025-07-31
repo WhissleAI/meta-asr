@@ -1,0 +1,82 @@
+As an expert linguistic annotator specializing in English Natural Language Understanding (NLU) for diverse content domains, your task is to meticulously annotate raw English text that may contain one or more sentences from any type of communication or content source. The input will be provided as a raw lowercase transcription from the specified domain. Your annotation process must strictly follow these steps and output specifications:
+
+---
+
+I. CORE ANNOTATION TASKS:
+
+1. TOKENIZATION:
+   Split the input text into individual word tokens across all sentences. Treat punctuation (commas, periods, question marks, etc.) as separate tokens unless it is integral to a multi-word term (e.g., "follow-up", "reference-id:12345"). Ensure every token, including punctuation, is included in the output.
+
+2. BIO TAGGING (Token-Level):
+   Assign exactly one BIO tag to each token based on its role, ensuring the number of tags matches the number of tokens exactly. Entity tags take strict precedence over intent tags.
+
+   a. Entity Tags (B-<ENTITY_TYPE>, I-<ENTITY_TYPE>):
+      Identify and tag all domain-relevant entities using these universal types:
+      • PERSON — any named individual or role reference
+      • ORGANIZATION — companies, institutions, groups
+      • LOCATION — physical places or virtual spaces
+      • TIME_REFERENCE — dates, durations, frequencies
+      • NUMERIC_VALUE — quantities, measurements, statistics
+      • DOMAIN_TERM — specialized vocabulary for the domain
+      • PRODUCT — items, services, or offerings
+      • ATTRIBUTE — qualities, characteristics, or properties
+      • ACTION_OBJECT — activities, practices, or procedures
+      • REFERENCE_ID — identifiers, codes, or reference numbers
+      • SOURCE — information origins, citations, authorities
+      • QUOTED_TEXT — direct quotations from any source
+
+      B-<ENTITY_TYPE>: first token of an entity phrase
+      I-<ENTITY_TYPE>: subsequent tokens in the same entity phrase
+
+   b. Utterance Intent Tags (B-<INTENT>, I-<INTENT>):
+      For tokens not part of any entity (and not O), tag their communicative intent. Available intents:
+      • INFORM — providing factual information or explanation
+      • INQUIRE — asking for information or clarification
+      • DIRECT — instructing, recommending, or guiding action
+      • EVALUATE — expressing assessment or judgment
+      • CHALLENGE — questioning, contradicting, or confronting
+      • RESPOND — replying to previous communication
+      • ELABORATE — providing additional details or context
+      • TRANSITION — changing topics or shifting focus
+      • COMPARE_CONTRAST — highlighting similarities or differences
+      • EMPHASIZE — stressing importance or significance
+      • INTRODUCE — presenting new information or concepts
+      • CONCLUDE — summarizing or finalizing communication
+
+      Rule: For each sentence, tag the first non-entity token as B-<INTENT>, then subsequent non-entity tokens as I-<INTENT>. Reset the intent tag (B-<INTENT>) at the start of each new sentence if applicable.
+
+   c. Outside Tag (O):
+      Use O for purely functional tokens, including filler words ("um", "uh"), common function words with no semantic content beyond syntax, and standalone punctuation (e.g., periods, commas). Every punctuation token must be tagged as O unless part of a multi-word term.
+
+3. OVERALL UTTERANCE INTENT:
+   Determine the single, most dominant intent of the entire input text (across all sentences) from the list above. If multiple sentences have different intents, select the intent that best represents the overall communicative purpose.
+
+4. DOMAIN CLASSIFICATION:
+   Specify the content domain that best matches the input:
+   • ENTERTAINMENT (movies, TV shows, media)
+   • WELLNESS (health, fitness, nutrition)
+   • EDUCATIONAL (instructional, academic)
+   • INFORMATIONAL (news, documentaries)
+   • DISCUSSION (debates, interviews, conversations)
+   • COMMERCIAL (product demos, advertisements)
+   • TECHNICAL (specialized professional content)
+   • SOCIAL (interpersonal communication)
+   • CREATIVE (artistic, design-oriented)
+   • PROCEDURAL (how-to, tutorials)
+
+---
+
+II. OUTPUT FORMAT (STRICT JSON ARRAY):
+
+Return a single JSON object representing the entire input text, including all sentences, in the following format:
+
+```json
+[
+  {
+    "text": "original lowercase input text including all sentences",
+    "tokens": ["token1", "token2", "..."],
+    "tags": ["tag1", "tag2", "..."],
+    "intent": "OVERALL_UTTERANCE_INTENT",
+    "domain": "CONTENT_DOMAIN"
+  }
+]

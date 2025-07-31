@@ -52,13 +52,41 @@ def get_audio_duration(audio_path: Path) -> Optional[float]:
             logger.error(f"Failed to get duration for {audio_path.name}: {le}", exc_info=False)
             return None
 
+# def trim_audio(audio_path: Path, segment_length_ms: int, output_dir: Path) -> List[Path]:
+#     """
+#     Trims an audio file into segments of a specified length.
+
+#     Args:
+#         audio_path: Path to the input audio file.
+#         segment_length_ms: Desired length of each segment in milliseconds.
+#         output_dir: Directory to save the trimmed audio segments.
+
+#     Returns:
+#         A list of paths to the trimmed audio segments.
+#     """
+#     try:
+#         audio = AudioSegment.from_file(audio_path)
+#         output_dir.mkdir(parents=True, exist_ok=True)
+#         trimmed_files = []
+#         # Ensure segment_length_ms is an integer for slicing
+#         step = int(segment_length_ms)
+#         for i, chunk in enumerate(audio[::step]):
+#             trimmed_file_path = output_dir / f"{audio_path.stem}_segment_{i}{audio_path.suffix}"
+#             chunk.export(trimmed_file_path, format=audio_path.suffix[1:])
+#             trimmed_files.append(trimmed_file_path)
+#         return trimmed_files
+#     except Exception as e:
+#         logger.error(f"Error trimming audio file {audio_path}: {e}", exc_info=True)
+#         return []
+
+
 def trim_audio(audio_path: Path, segment_length_ms: int, output_dir: Path) -> List[Path]:
     """
-    Trims an audio file into segments of a specified length.
+    Trims an audio file into segments of a specified length with overlap.
 
     Args:
         audio_path: Path to the input audio file.
-        segment_length_ms: Desired length of each segment in milliseconds.
+        segment_length_ms: Desired length of each segment in milliseconds (e.g., 30000 for 30 seconds).
         output_dir: Directory to save the trimmed audio segments.
 
     Returns:
@@ -66,14 +94,42 @@ def trim_audio(audio_path: Path, segment_length_ms: int, output_dir: Path) -> Li
     """
     try:
         audio = AudioSegment.from_file(audio_path)
+        audio_duration_ms = len(audio)  # Duration in milliseconds
+        segment_length_ms = int(segment_length_ms)
+        overlap_ms = 10000  # 10 seconds overlap in milliseconds
+        segment_duration_ms = 30000  # 30 seconds in milliseconds
+
         output_dir.mkdir(parents=True, exist_ok=True)
         trimmed_files = []
-        # Ensure segment_length_ms is an integer for slicing
-        step = int(segment_length_ms)
-        for i, chunk in enumerate(audio[::step]):
+
+        # If audio is <= 30 seconds, save it as is
+        if audio_duration_ms <= segment_duration_ms:
+            trimmed_file_path = output_dir / f"{audio_path.stem}_segment_0{audio_path.suffix}"
+            audio.export(trimmed_file_path, format=audio_path.suffix[1:])
+            trimmed_files.append(trimmed_file_path)
+            return trimmed_files
+
+        # Calculate step size (segment length minus overlap)
+        step_ms = segment_duration_ms - overlap_ms
+        num_segments = max(1, (audio_duration_ms - segment_duration_ms) // step_ms + 1)
+
+        for i in range(num_segments):
+            start_ms = i * step_ms
+            end_ms = min(start_ms + segment_duration_ms, audio_duration_ms)
+            chunk = audio[start_ms:end_ms]
             trimmed_file_path = output_dir / f"{audio_path.stem}_segment_{i}{audio_path.suffix}"
             chunk.export(trimmed_file_path, format=audio_path.suffix[1:])
             trimmed_files.append(trimmed_file_path)
+
+        # Handle remainder if audio duration is not perfectly divisible
+        if audio_duration_ms % step_ms > 0 and audio_duration_ms > segment_duration_ms:
+            start_ms = audio_duration_ms - segment_duration_ms
+            chunk = audio[start_ms:audio_duration_ms]
+            trimmed_file_path = output_dir / f"{audio_path.stem}_segment_{num_segments}{audio_path.suffix}"
+            chunk.export(trimmed_file_path, format=audio_path.suffix[1:])
+            trimmed_files.append(trimmed_file_path)
+
+        logger.info(f"Trimmed {audio_path.name} into {len(trimmed_files)} segments")
         return trimmed_files
     except Exception as e:
         logger.error(f"Error trimming audio file {audio_path}: {e}", exc_info=True)

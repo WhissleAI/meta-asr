@@ -91,32 +91,69 @@ http://localhost:8000/docs
 ### API Endpoints
 
 1. **Status Check**
+
    ```
    GET /status
    ```
+
    Returns information about the API version and available models.
 
-2. **Create Transcription-Only Manifest**
+2. **Create Transcription-Only Manifest (Local Directory)**
+
    ```
    POST /create_transcription_manifest/
    ```
-   Transcribes audio files and creates a simple JSONL manifest with just the transcriptions.
 
-3. **Create Annotated Manifest**
+   Transcribes audio files in a local directory and creates a simple JSONL manifest with just the transcriptions.
+
+3. **Create Annotated Manifest (Local Directory)**
+
    ```
    POST /create_annotated_manifest/
    ```
-   Processes audio files with full analysis (transcription, age/gender detection, emotion analysis, entity/intent annotation).
+
+   Processes audio files in a local directory with full analysis (transcription, age/gender detection, emotion analysis, entity/intent annotation).
+
+4. **Process Single GCS File**
+
+   ```
+   POST /process_gcs_file/
+   ```
+
+   Downloads, transcribes, and annotates a single audio file from Google Cloud Storage (GCS). Accepts a `gs://bucket/path/file.wav` path.
+
+5. **Process All .wav Files in a GCS Directory**
+   ```
+   POST /process_gcs_directory/
+   ```
+   Downloads, transcribes, and annotates all `.wav` files in a GCS bucket folder. Accepts a `gs://bucket/path/to/folder/` path.
+
+### GCS Path Format
+
+For GCS endpoints, always use the `gs://bucket/path/to/file.wav` or `gs://bucket/path/to/folder/` format (not browser URLs).
 
 ### Request Format
 
-Both main endpoints accept the same request format:
+**For local directory endpoints:**
 
 ```json
 {
   "directory_path": "/absolute/path/to/audio/directory",
-  "model_choice": "gemini",  // or "whissle"
+  "model_choice": "gemini", // or "whissle"
   "output_jsonl_path": "/absolute/path/for/results.jsonl"
+}
+```
+
+**For GCS endpoints:**
+
+```json
+{
+  "user_id": "user_123",
+  "gcs_path": "gs://your-bucket/path/to/audio.wav", // or "gs://your-bucket/path/to/folder/"
+  "model_choice": "gemini",
+  "output_jsonl_path": "/absolute/path/for/gcs_results.jsonl",
+  "annotations": ["age", "gender", "emotion", "entity", "intent"],
+  "prompt": "Custom prompt for annotation (optional)"
 }
 ```
 
@@ -188,6 +225,13 @@ print(response.json())
 - FLAC (.flac)
 - OGG (.ogg)
 - M4A (.m4a)
+
+## Temporary Download Directory for GCS Files
+
+- The server uses a temporary directory for downloading GCS files before processing.
+- By default, it uses the `TEMP_DOWNLOAD_DIR` environment variable if set.
+- If not set, it creates and uses a `temp_gcs_downloads` directory in the project root automatically.
+- The directory is created if it does not exist.
 
 ## Troubleshooting
 

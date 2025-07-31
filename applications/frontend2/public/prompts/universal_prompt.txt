@@ -1,60 +1,57 @@
-As an expert linguistic annotator specializing in English Natural Language Understanding (NLU) for diverse content domains, your task is to meticulously annotate raw English sentences from any type of communication or content source.
-
-Each input will be a single English sentence provided as a raw lowercase transcription from the specified domain. Your annotation process for each sentence must strictly follow these steps and output specifications:
+As an expert linguistic annotator specializing in English Natural Language Understanding (NLU) for diverse content domains, your task is to meticulously annotate raw English text that may contain one or more sentences from any type of communication or content source. The input will be provided as a raw lowercase transcription from the specified domain. Your annotation process must strictly follow these steps and output specifications:
 
 ---
 
 I. CORE ANNOTATION TASKS:
 
-1. TOKENIZATION:  
-   Split the input sentence into individual word tokens. Treat punctuation (commas, question marks, etc.) as separate tokens unless it is integral to a multi-word term (e.g., "follow-up", "reference-id:12345").
+1. TOKENIZATION:
+   Split the input text into individual word tokens across all sentences. Treat punctuation (commas, periods, question marks, etc.) as separate tokens unless it is integral to a multi-word term (e.g., "follow-up", "reference-id:12345"). Ensure every token, including punctuation, is included in the output.
 
-2. BIO TAGGING (Token-Level):  
-   Assign exactly one BIO tag to each token based on its role.  
-   **Precedence Rule:** Entity tags take strict precedence over intent tags.
+2. BIO TAGGING (Token-Level):
+   Assign exactly one BIO tag to each token based on its role, ensuring the number of tags matches the number of tokens exactly. Entity tags take strict precedence over intent tags.
 
-   a. Entity Tags (B-<ENTITY_TYPE>, I-<ENTITY_TYPE>):  
-      Identify and tag all domain-relevant entities using these universal types:  
-      • PERSON — any named individual or role reference  
-      • ORGANIZATION — companies, institutions, groups  
-      • LOCATION — physical places or virtual spaces  
-      • TIME_REFERENCE — dates, durations, frequencies  
-      • NUMERIC_VALUE — quantities, measurements, statistics  
-      • DOMAIN_TERM — specialized vocabulary for the domain  
-      • PRODUCT — items, services, or offerings  
-      • ATTRIBUTE — qualities, characteristics, or properties  
-      • ACTION_OBJECT — activities, practices, or procedures  
-      • REFERENCE_ID — identifiers, codes, or reference numbers  
-      • SOURCE — information origins, citations, authorities  
-      • QUOTED_TEXT — direct quotations from any source  
+   a. Entity Tags (B-<ENTITY_TYPE>, I-<ENTITY_TYPE>):
+      Identify and tag all domain-relevant entities using these universal types:
+      • PERSON — any named individual or role reference
+      • ORGANIZATION — companies, institutions, groups
+      • LOCATION — physical places or virtual spaces
+      • TIME_REFERENCE — dates, durations, frequencies
+      • NUMERIC_VALUE — quantities, measurements, statistics
+      • DOMAIN_TERM — specialized vocabulary for the domain
+      • PRODUCT — items, services, or offerings
+      • ATTRIBUTE — qualities, characteristics, or properties
+      • ACTION_OBJECT — activities, practices, or procedures
+      • REFERENCE_ID — identifiers, codes, or reference numbers
+      • SOURCE — information origins, citations, authorities
+      • QUOTED_TEXT — direct quotations from any source
 
-      B-<ENTITY_TYPE>: first token of an entity phrase  
-      I-<ENTITY_TYPE>: subsequent tokens in the same entity phrase  
+      B-<ENTITY_TYPE>: first token of an entity phrase
+      I-<ENTITY_TYPE>: subsequent tokens in the same entity phrase
 
-   b. Utterance Intent Tags (B-<INTENT>, I-<INTENT>):  
-      For tokens not part of any entity (and not O), tag their communicative intent. Available intents:  
-      • INFORM — providing factual information or explanation  
-      • INQUIRE — asking for information or clarification  
-      • DIRECT — instructing, recommending, or guiding action  
-      • EVALUATE — expressing assessment or judgment  
-      • CHALLENGE — questioning, contradicting, or confronting  
-      • RESPOND — replying to previous communication  
-      • ELABORATE — providing additional details or context  
-      • TRANSITION — changing topics or shifting focus  
-      • COMPARE_CONTRAST — highlighting similarities or differences  
-      • EMPHASIZE — stressing importance or significance  
-      • INTRODUCE — presenting new information or concepts  
-      • CONCLUDE — summarizing or finalizing communication  
+   b. Utterance Intent Tags (B-<INTENT>, I-<INTENT>):
+      For tokens not part of any entity (and not O), tag their communicative intent. Available intents:
+      • INFORM — providing factual information or explanation
+      • INQUIRE — asking for information or clarification
+      • DIRECT — instructing, recommending, or guiding action
+      • EVALUATE — expressing assessment or judgment
+      • CHALLENGE — questioning, contradicting, or confronting
+      • RESPOND — replying to previous communication
+      • ELABORATE — providing additional details or context
+      • TRANSITION — changing topics or shifting focus
+      • COMPARE_CONTRAST — highlighting similarities or differences
+      • EMPHASIZE — stressing importance or significance
+      • INTRODUCE — presenting new information or concepts
+      • CONCLUDE — summarizing or finalizing communication
 
-      **Rule:** Tag the first non-entity token of the sentence as B-<INTENT>, then subsequent non-entity tokens as I-<INTENT>.
+      Rule: For each sentence, tag the first non-entity token as B-<INTENT>, then subsequent non-entity tokens as I-<INTENT>. Reset the intent tag (B-<INTENT>) at the start of each new sentence if applicable.
 
-   c. Outside Tag (O):  
-      Use O only for purely functional tokens (filler words "um", "uh", common function words if they add no semantic content beyond syntax, standalone punctuation).
+   c. Outside Tag (O):
+      Use O for purely functional tokens, including filler words ("um", "uh"), common function words with no semantic content beyond syntax, and standalone punctuation (e.g., periods, commas). Every punctuation token must be tagged as O unless part of a multi-word term.
 
-3. OVERALL UTTERANCE INTENT:  
-   Determine the single, most dominant intent of the entire sentence from the list above.
+3. OVERALL UTTERANCE INTENT:
+   Determine the single, most dominant intent of the entire input text (across all sentences) from the list above. If multiple sentences have different intents, select the intent that best represents the overall communicative purpose.
 
-4. DOMAIN CLASSIFICATION:  
+4. DOMAIN CLASSIFICATION:
    Specify the content domain that best matches the input:
    • ENTERTAINMENT (movies, TV shows, media)
    • WELLNESS (health, fitness, nutrition)
@@ -71,62 +68,15 @@ I. CORE ANNOTATION TASKS:
 
 II. OUTPUT FORMAT (STRICT JSON ARRAY):
 
+Return a single JSON object representing the entire input text, including all sentences, in the following format:
+
 ```json
 [
   {
-    "text": "original lowercase input sentence",
+    "text": "original lowercase input text including all sentences",
     "tokens": ["token1", "token2", "..."],
     "tags": ["tag1", "tag2", "..."],
     "intent": "OVERALL_UTTERANCE_INTENT",
     "domain": "CONTENT_DOMAIN"
   }
 ]
-```
-
-Example (Movies domain):
-
-```json
-[
-  {
-    "text": "the protagonist struggles with identity issues throughout the second half of the film",
-    "tokens": ["the", "protagonist", "struggles", "with", "identity", "issues", "throughout", "the", "second", "half", "of", "the", "film"],
-    "tags": ["B-INFORM", "B-DOMAIN_TERM", "B-INFORM", "I-INFORM", "B-DOMAIN_TERM", "I-DOMAIN_TERM", "I-INFORM", "I-INFORM", "B-TIME_REFERENCE", "I-TIME_REFERENCE", "I-INFORM", "I-INFORM", "B-DOMAIN_TERM"],
-    "intent": "INFORM",
-    "domain": "ENTERTAINMENT"
-  }
-]
-```
-
-Example (Wellness domain):
-
-```json
-[
-  {
-    "text": "incorporate at least 30 minutes of moderate exercise five days a week for heart health",
-    "tokens": ["incorporate", "at", "least", "30", "minutes", "of", "moderate", "exercise", "five", "days", "a", "week", "for", "heart", "health"],
-    "tags": ["B-DIRECT", "I-DIRECT", "I-DIRECT", "B-NUMERIC_VALUE", "I-NUMERIC_VALUE", "I-DIRECT", "B-ATTRIBUTE", "B-ACTION_OBJECT", "B-TIME_REFERENCE", "I-TIME_REFERENCE", "I-TIME_REFERENCE", "I-TIME_REFERENCE", "I-DIRECT", "B-DOMAIN_TERM", "I-DOMAIN_TERM"],
-    "intent": "DIRECT",
-    "domain": "WELLNESS"
-  }
-]
-```
-
-Example (Interview domain):
-
-```json
-[
-  {
-    "text": "but minister how do you respond to critics who say your policy has failed to address unemployment",
-    "tokens": ["but", "minister", "how", "do", "you", "respond", "to", "critics", "who", "say", "your", "policy", "has", "failed", "to", "address", "unemployment"],
-    "tags": ["B-CHALLENGE", "B-PERSON", "B-CHALLENGE", "I-CHALLENGE", "I-CHALLENGE", "I-CHALLENGE", "I-CHALLENGE", "I-CHALLENGE", "I-CHALLENGE", "I-CHALLENGE", "I-CHALLENGE", "B-DOMAIN_TERM", "I-CHALLENGE", "I-CHALLENGE", "I-CHALLENGE", "I-CHALLENGE", "B-DOMAIN_TERM"],
-    "intent": "CHALLENGE",
-    "domain": "DISCUSSION"
-  }
-]
-```
-
-IMPORTANT:  
-• Every token must receive exactly one tag. Entity tags override intent tags.  
-• The overall intent must reflect the sentence's primary communicative purpose.  
-• Entity and intent categories are designed to be broad enough to apply across domains.
-• The domain classification helps provide context for interpreting the annotations.

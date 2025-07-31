@@ -1,7 +1,7 @@
+
 # applications/config.py# GCS Configuration
 # Removed: GOOGLE_APPLICATION_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_PATH")
 import os
-TEMP_DOWNLOAD_DIR = os.getenv("TEMP_DOWNLOAD_DIR", r"E:\\Meta_asr\\meta-asr\\applications\\temp_gcs_downloads") # Changed default and used raw string
 from pathlib import Path
 import logging
 from dotenv import load_dotenv
@@ -24,9 +24,19 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg', '.m4a']
 TARGET_SAMPLE_RATE = 16000
 
-# GCS Configuration
-# Removed: GOOGLE_APPLICATION_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_PATH")
-TEMP_DOWNLOAD_DIR = os.getenv("TEMP_DOWNLOAD_DIR", r"E:\\Meta_asr\\meta-asr\\applications\\temp_gcs_downloads") # Corrected: Used raw string and a slightly different default name to avoid confusion
+# Set TEMP_DOWNLOAD_DIR: use env var if set, else create/use ./temp_gcs_downloads in project root
+_env_temp_dir = os.getenv("TEMP_DOWNLOAD_DIR")
+if _env_temp_dir:
+    TEMP_DOWNLOAD_DIR = _env_temp_dir
+else:
+    # Use a temp_gcs_downloads directory in the root of the project
+    TEMP_DOWNLOAD_DIR = str(Path(__file__).parent.parent / "temp_gcs_downloads")
+
+# Ensure the temporary download directory exists
+try:
+    Path(TEMP_DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
+except Exception as e:
+    logger.error(f"Failed to create temporary download directory {TEMP_DOWNLOAD_DIR}: {e}")
 
 ENTITY_TYPES = [
     "PERSON_NAME", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "STATE", "COUNTRY", "ZIP_CODE", "CURRENCY", "PRICE",

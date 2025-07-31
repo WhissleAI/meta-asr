@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 "use client"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -11,12 +13,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { loadPrompts } from "@/utils/loadPrompt"
-import { AlertCircle, CheckCircle, Loader2 } from "lucide-react"
-import { useEffect, useState, useRef } from "react"
-import { useSession } from "next-auth/react"
 import { initFastApiUserSession } from "@/utils/sessionManager"
+import { AlertCircle, CheckCircle, Loader2 } from "lucide-react"
+import { useSession } from "next-auth/react"
+import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
-import { AnnotationInstructions } from "../../components/AnnotationInstructions" // Added import
+import { AnnotationInstructions } from "../../components/AnnotationInstructions"; // Added import
 
 interface ProcessResponse {
   message: string
@@ -73,6 +75,7 @@ export default function Home() {
   const [gcsProcessingStatus, setGcsProcessingStatus] = useState<string[]>([])
   const websocketRef = useRef<WebSocket | null>(null)
   const [segmentLength, setSegmentLength] = useState<number | string>("") // New state for segment length
+  const [gcsPathType, setGcsPathType] = useState<"uno" | "poly">("uno") // New state for GCS path type
 
   // Initialize FastAPI session on authenticated load
   useEffect(() => {
@@ -263,6 +266,8 @@ export default function Home() {
     // setGcsProcessingStatus([]); // Keep previous status messages or clear as preferred
 
     try {
+      const fastapiBaseUrl = process.env.NEXT_PUBLIC_API_URL
+      const gcsUrl = gcsPathType === 'uno' ? '/api/process-gcs-file-proxy' : `${fastapiBaseUrl}/process_gcs_directory`
       const selectedAnnotationsList = transcriptionType === "annotated"
         ? Object.keys(annotations).filter(key => annotations[key as keyof typeof annotations])
         : []
@@ -273,8 +278,9 @@ export default function Home() {
         annotations: selectedAnnotationsList,
         prompt: transcriptionType === "annotated" && customPrompt ? customPrompt : null,
         output_jsonl_path: gcsOutputJsonlPath, // New: Add GCS output path to request
+        path_type: gcsPathType,
       }
-      const fetchResponse = await fetch('/api/process-gcs-file-proxy', {
+      const fetchResponse = await fetch(gcsUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(apiRequestBody),
@@ -360,32 +366,55 @@ export default function Home() {
             </Select>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="input-path">Input Path</Label>
-            <Input
-              id="input-path"
-              value={inputPath}
-              onChange={(e) => setInputPath(e.target.value)}
-              placeholder={sourceType === "directory" ? "/home/user/workspace/test" : "gs://your-bucket-name/path/to/audio.wav"}
-              disabled={isLoading}
-            />
-            <p className="text-sm text-muted-foreground">
-              {sourceType === "directory" ? "Path must be accessible to the backend server" : "Enter a valid GCS path starting with gs://"}
-            </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {sourceType === "gcs" && (
+              <div className="space-y-2">
+                <Label htmlFor="gcs-output-path-type">Output Path Type</Label>
+                <Select
+                  value={gcsPathType}
+                  onValueChange={(value) => setGcsPathType(value as "uno" | "poly")}
+                  disabled={isLoading}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select output path type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="uno">Single</SelectItem>
+                    <SelectItem value="poly">Full Directory</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-sm text-muted-foreground">
+                  Single File or multiple files in a directory.
+                </p>
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="input-path">Input Path</Label>
+              <Input
+                id="input-path"
+                value={inputPath}
+                onChange={(e) => setInputPath(e.target.value)}
+                placeholder={sourceType === "directory" ? "/home/user/workspace/test" : "gs://your-bucket-name/path/to/audio.wav"}
+                disabled={isLoading}
+              />
+              <p className="text-sm text-muted-foreground">
+                {sourceType === "directory" ? "Path must be accessible to the backend server" : "Enter a valid GCS path starting with gs://"}
+              </p>
+            </div>
           </div>
 
           {sourceType === "gcs" && ( // New: Input field for GCS output path
             <div className="space-y-2">
-              <Label htmlFor="gcs-output-path">Output JSONL Path (GCS)</Label>
+              <Label htmlFor="gcs-output-path">Output Directory Path (GCS)</Label>
               <Input
                 id="gcs-output-path"
                 value={gcsOutputJsonlPath}
                 onChange={(e) => setGcsOutputJsonlPath(e.target.value)}
-                placeholder="/path/on/server/to/gcs_output.jsonl"
+                placeholder="/path/on/server/to/gcs_output"
                 disabled={isLoading}
               />
               <p className="text-sm text-muted-foreground">
-                Server-side path where the GCS processing result (JSONL) will be saved.
+                Server-side path where the GCS processing results will be saved.
               </p>
             </div>
           )}

@@ -1,3 +1,4 @@
+
 # applications/gcs_utils.py
 import os
 from pathlib import Path
@@ -64,6 +65,27 @@ def download_gcs_blob(bucket_name: str, blob_name: str) -> Optional[Path]:
     except Exception as e:
         logger.error(f"Failed to download blob gs://{bucket_name}/{blob_name}: {e}", exc_info=True)
         return None
+
+
+# List all files with a given extension in a GCS bucket under a prefix
+def list_gcs_files(bucket_name: str, prefix: str, extension: str = ".wav") -> list[str]:
+    """
+    Lists all files in the given GCS bucket and prefix that end with the specified extension.
+    Returns a list of blob names (relative to the bucket).
+    """
+    client = get_gcs_client()
+    if not client:
+        logger.error("GCS client not available. Cannot list files.")
+        return []
+    try:
+        bucket = client.bucket(bucket_name)
+        blobs = bucket.list_blobs(prefix=prefix)
+        files = [blob.name for blob in blobs if blob.name.lower().endswith(extension.lower())]
+        logger.info(f"Found {len(files)} files with extension '{extension}' in gs://{bucket_name}/{prefix}")
+        return files
+    except Exception as e:
+        logger.error(f"Failed to list files in gs://{bucket_name}/{prefix}: {e}", exc_info=True)
+        return []
 
 # Example usage (for testing this module directly):
 # if __name__ == "__main__":

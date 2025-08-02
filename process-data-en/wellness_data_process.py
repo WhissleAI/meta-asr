@@ -7,6 +7,15 @@ import os
 from pathlib import Path
 from typing import List, Dict, Any
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("Environment variables loaded from .env file.")
+except ImportError:
+    print("python-dotenv not found. Please install it with: pip install python-dotenv")
+    print("Falling back to system environment variables.")
+
 # --- Transformer and AI Model Imports ---
 from transformers import (
     AutoModelForAudioClassification,
@@ -43,21 +52,24 @@ else:
     device = torch.device("cpu")
 
 # --- Google Generative AI Configuration ---
-# Note: This part loads the Google API key from an environment variable.
-# Make sure to set `export GOOGLE_API_KEY='your_api_key'` in your terminal.
+# Load Google API key from .env file or environment variable
 is_gemini_configured = False
 try:
     GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
     if not GOOGLE_API_KEY:
-        raise ValueError("GOOGLE_API_KEY environment variable not found.")
+        raise ValueError("GOOGLE_API_KEY not found in environment variables or .env file.")
+    
     genai.configure(api_key=GOOGLE_API_KEY)
     # Test configuration by listing models
     next(genai.list_models())
     is_gemini_configured = True
-    print("Google Generative AI configured successfully.")
+    print("✅ Google Generative AI configured successfully.")
+    print(f"   API Key loaded: {GOOGLE_API_KEY[:10]}...{GOOGLE_API_KEY[-4:]}")  # Show partial key for verification
+    
 except (ValueError, Exception) as e:
-    print(f"Warning: Google Generative AI could not be configured: {e}")
-    print("The annotation step will be skipped. Please set the GOOGLE_API_KEY environment variable.")
+    print(f"❌ Warning: Google Generative AI could not be configured: {e}")
+    print("   The annotation step will be skipped.")
+    print("   Please add your GOOGLE_API_KEY to the .env file or set as environment variable.")
 
 # --- Model Definitions for Local Inference (Age, Gender, Emotion) ---
 class ModelHead(nn.Module):
@@ -158,69 +170,76 @@ def get_age_bucket(age: float) -> str:
     if actual_age < 60: return "45-60"
     return "60+"
 
-def annotate_batch_wellness_texts(batch_transcriptions: List[str]) -> List[Dict[str, Any]]:
+def annotate_batch_wellness_texts(batch_transcriptions: List[str]) -> List[str]:
     """
     Annotates a batch of wellness/fitness transcriptions using a specialized Gemini prompt.
-    Returns a list of structured dictionaries as specified in the prompt.
+    Returns a list of annotated strings with entity tags and intent classifications.
     """
     if not is_gemini_configured:
         print("Error: Gemini API not configured. Skipping annotation.")
-        return [{} for _ in batch_transcriptions] # Return empty dicts for each item
+        return batch_transcriptions  # Return original transcriptions
 
-    prompt = f'''
-You are an expert AI specializing in analyzing transcripts from wellness and fitness audio.
-Your task is to process a list of transcripts and for each one, return a structured JSON object containing an intent classification and detailed BIO (Beginning, Inside, Outside) entity tagging.
+    # Add metadata tags to transcriptions (age, gender, emotion info will be added later)
+    transcriptions_with_metadata = []
+    for transcription in batch_transcriptions:
+        # For now, we'll add placeholder metadata that will be replaced later in the processing
+        transcriptions_with_metadata.append(f"{transcription} AGE_PLACEHOLDER GENDER_PLACEHOLDER EMOTION_PLACEHOLDER")
 
-**Follow these instructions carefully for EACH transcript in the input list:**
+    prompt = f'''You are an expert AI assistant specializing in annotating English-language transcripts from the wellness and fitness domain.
+Your task is to analyze transcribed sentences and tag specific entities and the speaker's intent according to a strict set of rules.
 
-1.  **Analyze the Intent:** Determine the single primary intent of the speaker from the list below.
-2.  **Perform Entity Recognition:** Identify and tag specific entities within the transcript using the BIO scheme.
-3.  **Tokenize Correctly:** The 'tokens' list in your output must be the words from the original transcript.
-4.  **Format Output as JSON:** Your final output must be a single JSON array `[...]`, where each element is a JSON object `{...}` corresponding to one of the input transcripts.
+You will receive a JSON array of strings. Each string is a sentence that may already have metadata tags like AGE_*, GENDER_*, and EMOTION_* at the end.
 
----
-**Intent Categories (Choose ONE per transcript):**
-*   `INSTRUCTION`: Guiding the user through an action, exercise, or process (e.g., "Now, lift your legs slowly").
-*   `MOTIVATION`: Encouraging the user or providing positive reinforcement (e.g., "You're doing great, keep it up!").
-*   `INFORM`: Providing factual information, tips, or explanations about health or fitness (e.g., "This exercise targets the core muscles").
-*   `QUESTION`: Asking the user a direct question (e.g., "How does that feel?").
-*   `FEEDBACK`: Commenting on form, progress, or sensation (e.g., "I can feel a deep stretch in my hamstrings").
-*   `OTHER`: For any text that does not fit the categories above.
-
-**Entity Types for BIO Tagging:**
-*   `ACTIVITY`: A specific exercise, workout type, or physical action (e.g., "push-up", "running", "yoga", "meditation").
-*   `BODY_PART`: Any part of the human body mentioned (e.g., "shoulders", "knees", "core", "back").
-*   `DURATION`: A length of time (e.g., "30 seconds", "one minute", "an hour").
-*   `REPETITION`: A count of an exercise or action (e.g., "ten reps", "3 sets").
-*   `EQUIPMENT`: A piece of fitness equipment (e.g., "dumbbell", "mat", "resistance band").
-*   `HEALTH_METRIC`: A measurable health or performance indicator (e.g., "heart rate", "calories").
-*   `DIET_FOOD`: A specific food, drink, or dietary style (e.g., "protein", "water", "vegan").
+Your Task and Rules:
+1.  **INPUT/OUTPUT:** Your input is a JSON array of strings. Your output MUST be a JSON array containing the same number of strings.
+2.  **PRESERVE EXISTING TAGS:** Keep the `AGE_`, `GENDER_`, and `EMOTION_` tags at the end of each sentence. Do not modify or move them.
+3.  **ENTITY ANNOTATION:** Identify entities from the **Entity Types List** below. This includes both wellness-specific and general entities.
+4.  **ENTITY TAG FORMAT (CRITICAL):**
+    *   Insert the tag **BEFORE** the entity: `ENTITY_<TYPE>` (e.g., `ENTITY_ACTIVITY`).
+    *   **NO SPACES** in the `<TYPE>` (e.g., use `BODY_PART`, not `BODY PART`).
+    *   Immediately **AFTER** the entity text, add a single space and the word `END`.
+5.  **SPEAKER INTENT TAG:** Based on the text, determine the single primary intent. Add **ONE** intent tag from the **Speaker Intent List** at the absolute end of the entire string, after all other tags.
+6.  **OUTPUT FORMAT (CRITICAL):** Return ONLY a valid JSON array of strings. Do not include any other text or markdown formatting outside of the JSON array.
 
 ---
-**CRITICAL OUTPUT FORMAT:**
-For each input transcript, create a JSON object with these exact keys:
-{{
-  "gemini_intent": "...",
-  "bio_annotation_gemini": {{
-    "tokens": ["word1", "word2", ...],
-    "tags": ["B-TAG", "I-TAG", "O", ...]
-  }}
-}}
+**Entity Types List (USE ONLY THESE):**
 
+**Wellness & Fitness Entities:**
+*   `ACTIVITY`: A specific exercise, workout type, or physical action (e.g., "running", "yoga", "deep squat", "meditation").
+*   `BODY_PART`: Any part of the human body mentioned (e.g., "shoulders", "knees", "core", "hamstrings").
+*   `DIET_FOOD`: A specific food, drink, supplement, or dietary style (e.g., "protein shake", "kale", "water", "vegan diet").
+*   `HEALTH_METRIC`: A measurable health or performance indicator (e.g., "heart rate", "calories burned", "blood pressure").
+*   `EQUIPMENT`: A piece of fitness equipment (e.g., "dumbbell", "yoga mat", "resistance band").
+*   `DURATION`: A specific length of time for an activity (e.g., "30 seconds", "one minute", "for an hour").
+*   `REPETITION`: A count of an exercise or action (e.g., "ten reps", "3 sets of 12").
+
+**General Entities:**
+*   `PERSON_NAME`: The name of a person (e.g., "Dr. Huberman", "Adriene").
+*   `LOCATION`: A city, state, country, or specific place (e.g., "California", "Central Park").
+*   `ORGANIZATION`: A company, institution, or brand (e.g., "Peloton", "World Health Organization").
+*   `DATE_TIME`: A specific date or time of day (e.g., "tomorrow morning", "last week", "on Monday").
+
+---
+**Speaker Intent List (Choose ONE per sentence):**
+*   `INTENT_INSTRUCTION`: Guiding the user through an action, exercise, or process.
+*   `INTENT_MOTIVATION`: Encouraging the user or providing positive reinforcement.
+*   `INTENT_INFORMATIONAL`: Providing factual information, tips, or explanations about health or fitness.
+*   `INTENT_QUESTION`: Asking the user a direct question.
+*   `INTENT_PERSONAL_EXPERIENCE`: Sharing a personal story, feeling, or feedback.
+*   `INTENT_OTHER`: For any text that does not fit the categories above.
+
+---
 **Example:**
-*Input Transcript:* "For the next 30 seconds, we will do a deep squat."
-*Correct JSON Object Output for this transcript:*
-{{
-  "gemini_intent": "INSTRUCTION",
-  "bio_annotation_gemini": {{
-    "tokens": ["For", "the", "next", "30", "seconds", ",", "we", "will", "do", "a", "deep", "squat", "."],
-    "tags":   ["O", "O", "O", "B-DURATION", "I-DURATION", "O", "O", "O", "O", "O", "B-ACTIVITY", "I-ACTIVITY", "O"]
-  }}
-}}
+
+**Input JSON:**
+["Next, we are going to do ten reps of a deep squat for 30 seconds. AGE_30_45 GENDER_FEMALE EMOTION_CALM"]
+
+**CORRECT Output JSON:**
+["Next, we are going to do ENTITY_REPETITION ten reps END of a ENTITY_ACTIVITY deep squat END for ENTITY_DURATION 30 seconds END. AGE_30_45 GENDER_FEMALE EMOTION_CALM INTENT_INSTRUCTION"]
 
 ---
-**Transcripts to Process (return a JSON array with one object for each):**
-{json.dumps(batch_transcriptions, ensure_ascii=False, indent=2)}
+Annotate the following sentences provided in the JSON array. Ensure your output is ONLY a JSON array of strings:
+{json.dumps(transcriptions_with_metadata, ensure_ascii=False, indent=2)}
 '''
 
     max_retries = 3
@@ -235,10 +254,10 @@ For each input transcript, create a JSON object with these exact keys:
             annotated_data = json.loads(cleaned_response)
 
             if isinstance(annotated_data, list) and len(annotated_data) == len(batch_transcriptions):
-                # Basic validation of the returned structure
+                # Validate that all items are strings
                 for item in annotated_data:
-                    if not ("gemini_intent" in item and "bio_annotation_gemini" in item):
-                        raise ValueError("Returned JSON object is missing required keys.")
+                    if not isinstance(item, str):
+                        raise ValueError("API returned non-string items in the array.")
                 return annotated_data
             else:
                 raise ValueError(f"API returned data of mismatched length. Expected {len(batch_transcriptions)}, got {len(annotated_data)}.")
@@ -246,25 +265,60 @@ For each input transcript, create a JSON object with these exact keys:
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Error decoding or validating Gemini response (Attempt {attempt+1}/{max_retries}): {e}")
             if attempt == max_retries - 1:
-                return [{} for _ in batch_transcriptions]
+                return batch_transcriptions  # Return original transcriptions if all attempts fail
             time.sleep(retry_delay_seconds * (attempt + 1))
         except Exception as e:
             print(f"An unexpected error occurred with Gemini API (Attempt {attempt+1}/{max_retries}): {e}")
             if attempt == max_retries - 1:
-                return [{} for _ in batch_transcriptions]
+                return batch_transcriptions  # Return original transcriptions if all attempts fail
             time.sleep(retry_delay_seconds * (attempt + 1))
 
-    return [{} for _ in batch_transcriptions]
+    return batch_transcriptions  # Return original transcriptions if all attempts fail
 
 
-def process_audio_and_annotate(audio_dir: str, output_jsonl_path: str, batch_size: int = 10):
+def extract_intent_from_annotated_text(annotated_text: str) -> str:
     """
-    Main function to process audio files, transcribe, analyze, and save structured annotations.
+    Extracts the intent from an annotated text string.
+    Looks for INTENT_ tags at the end of the string.
     """
-    os.makedirs(os.path.dirname(output_jsonl_path), exist_ok=True)
-    # Clear the output file at the start
-    with open(output_jsonl_path, 'w') as f_clear:
-        pass
+    # Split by spaces and look for intent tags
+    parts = annotated_text.split()
+    for part in reversed(parts):  # Start from the end
+        if part.startswith("INTENT_"):
+            return part
+    return "INTENT_OTHER"  # Default if no intent found
+
+
+def clean_annotated_text_for_output(annotated_text: str, age_group: str, gender: str, emotion: str) -> str:
+    """
+    Replaces placeholder metadata with actual values and ensures proper formatting.
+    """
+    # Replace placeholders with actual values
+    text = annotated_text.replace("AGE_PLACEHOLDER", f"AGE_{age_group.replace('-', '_')}")
+    text = text.replace("GENDER_PLACEHOLDER", f"GENDER_{gender.upper()}")
+    text = text.replace("EMOTION_PLACEHOLDER", f"EMOTION_{emotion.upper()}")
+    
+    return text
+
+
+def process_audio_and_annotate(audio_dir: str, output_json_path: str, batch_size: int = 10):
+    """
+    Main function to process audio files, transcribe, analyze, and save structured annotations
+to a single JSON file.
+    """
+    # Ensure output directory exists and is writable
+    output_dir = os.path.dirname(output_json_path)
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        # Test write permissions
+        test_file = os.path.join(output_dir, '.test_write')
+        with open(test_file, 'w') as f:
+            f.write('test')
+        os.remove(test_file)
+        print(f"✅ Output directory is writable: {output_dir}")
+    except Exception as e:
+        print(f"❌ ERROR: Cannot write to output directory {output_dir}: {e}")
+        return
 
     # --- Load All Models ---
     print("Loading local models...")
@@ -301,12 +355,18 @@ def process_audio_and_annotate(audio_dir: str, output_jsonl_path: str, batch_siz
     # --- Start Processing ---
     audio_files = get_audio_files(audio_dir)
     if not audio_files:
-        print("No audio files found. Exiting.")
+        print("❌ No audio files found. Exiting.")
+        print(f"Checked directory: {audio_dir}")
+        print("Supported formats: .wav, .mp3, .flac, .m4a")
         return
+
+    print(f"📁 Found {len(audio_files)} audio files to process")
+    print(f"📝 Output will be saved to: {output_json_path}")
+    print(f"⚙️ Batch size: {batch_size}")
 
     total_files = len(audio_files)
     records_buffer = []
-    total_records_saved = 0
+    all_processed_records = [] # List to hold all final records
 
     for i, audio_path in enumerate(audio_files):
         print(f"\nProcessing file {i+1}/{total_files}: {os.path.basename(audio_path)}")
@@ -350,30 +410,44 @@ def process_audio_and_annotate(audio_dir: str, output_jsonl_path: str, batch_siz
                 print(f"\n--- Annotating batch of {len(records_buffer)} records ---")
                 
                 transcriptions_to_annotate = [rec["original_transcription"] for rec in records_buffer]
-                gemini_annotations = annotate_batch_wellness_texts(transcriptions_to_annotate)
+                annotated_texts = annotate_batch_wellness_texts(transcriptions_to_annotate)
 
-                # Combine buffer data with Gemini annotations and save
-                lines_written = 0
-                with open(output_jsonl_path, 'a', encoding='utf-8') as f_out:
-                    for record_data, gemini_data in zip(records_buffer, gemini_annotations):
-                        # Final record combines local model results and Gemini results
-                        final_record = {
-                            "audio_filepath": record_data["audio_filepath"],
-                            "text": record_data["original_transcription"], # 'text' and 'original_transcription' are the same here
-                            "original_transcription": record_data["original_transcription"],
-                            "duration": record_data["duration"],
-                            "task_name": record_data["task_name"],
-                            "gender": record_data["gender"],
-                            "age_group": record_data["age_group"],
-                            "emotion": record_data["emotion"],
-                            "gemini_intent": gemini_data.get("gemini_intent", "FAILED_ANNOTATION"),
-                            "bio_annotation_gemini": gemini_data.get("bio_annotation_gemini", {"tokens": [], "tags": []})
-                        }
-                        f_out.write(json.dumps(final_record, ensure_ascii=False) + '\n')
-                        lines_written += 1
+                # Combine buffer data with Gemini annotations and add to the main list
+                for record_data, annotated_text in zip(records_buffer, annotated_texts):
+                    # Extract intent from the annotated text
+                    gemini_intent = extract_intent_from_annotated_text(annotated_text)
+                    
+                    # Clean and format the annotated text with actual metadata
+                    final_annotated_text = clean_annotated_text_for_output(
+                        annotated_text, 
+                        record_data["age_group"], 
+                        record_data["gender"], 
+                        record_data["emotion"]
+                    )
 
-                total_records_saved += lines_written
-                print(f"--- Batch saved. {lines_written} records written to {output_jsonl_path}. Total saved: {total_records_saved} ---")
+                    final_record = {
+                        "audio_filepath": record_data["audio_filepath"],
+                        "text": final_annotated_text,
+                        "original_transcription": record_data["original_transcription"],
+                        "duration": record_data["duration"],
+                        "task_name": record_data["task_name"],
+                        "gender": record_data["gender"],
+                        "age_group": record_data["age_group"],
+                        "emotion": record_data["emotion"],
+                        "gemini_intent": gemini_intent.replace("INTENT_", "") if gemini_intent.startswith("INTENT_") else "OTHER"
+                    }
+                    all_processed_records.append(final_record)
+
+                print(f"--- Batch processed. Total records collected: {len(all_processed_records)} ---")
+
+                # Incremental save after each batch to prevent data loss
+                try:
+                    temp_output_path = output_json_path.replace('.json', '_temp.json')
+                    with open(temp_output_path, 'w', encoding='utf-8') as f_temp:
+                        json.dump(all_processed_records, f_temp, ensure_ascii=False, indent=2)
+                    print(f"  Incremental save completed: {temp_output_path}")
+                except Exception as e:
+                    print(f"  Warning: Could not save incremental backup: {e}")
 
                 # Clear buffer and release memory
                 records_buffer = []
@@ -387,39 +461,94 @@ def process_audio_and_annotate(audio_dir: str, output_jsonl_path: str, batch_siz
             traceback.print_exc()
             continue
 
-    print("\n" + "="*30)
-    print("Processing Finished.")
-    print(f"Total records saved to {output_jsonl_path}: {total_records_saved}")
-    print("="*30)
+    # --- Final Step: Write all collected records to a single JSON file ---
+    print("\n" + "="*50)
+    print(f"Processing Finished. Writing {len(all_processed_records)} records to JSON file...")
+    
+    if len(all_processed_records) == 0:
+        print("No records to save. Check if audio files exist and processing completed successfully.")
+        return
+        
+    try:
+        # Ensure the output directory exists
+        os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
+        
+        # Write the final output
+        with open(output_json_path, 'w', encoding='utf-8') as f_out:
+            json.dump(all_processed_records, f_out, ensure_ascii=False, indent=2)
+        print(f"✅ Successfully saved {len(all_processed_records)} records to {output_json_path}")
+        
+        # Remove temporary file if it exists
+        temp_output_path = output_json_path.replace('.json', '_temp.json')
+        if os.path.exists(temp_output_path):
+            os.remove(temp_output_path)
+            print(f"Cleaned up temporary file: {temp_output_path}")
+            
+        # Print file size for verification
+        file_size = os.path.getsize(output_json_path) / (1024 * 1024)  # MB
+        print(f"Output file size: {file_size:.2f} MB")
+        
+    except Exception as e:
+        print(f"❌ FATAL ERROR: Could not write to output file {output_json_path}: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Try to save to a backup location
+        try:
+            backup_path = output_json_path.replace('.json', '_backup.json')
+            with open(backup_path, 'w', encoding='utf-8') as f_backup:
+                json.dump(all_processed_records, f_backup, ensure_ascii=False, indent=2)
+            print(f"💾 Data saved to backup location: {backup_path}")
+        except Exception as backup_error:
+            print(f"Could not save backup either: {backup_error}")
+    
+    print("="*50)
 
 
 # --- Configuration and Execution ---
 # !!! IMPORTANT: Update these paths to your specific directories !!!
-# Example for Google Drive mounted in Colab:
 AUDIO_FILES_DIR = "/external4/datasets/bucket_data/wellness/overlap"
-FINAL_OUTPUT_JSONL = "/hydra2-prev/home/compute/workspace_himanshu/wellness_fitness_annotations.jsonl"
+FINAL_OUTPUT_JSON = "/hydra2-prev/home/compute/workspace_himanshu/wellness_fitness_annotations.json"
 
 # Batch size for processing and annotating. Lower if you have memory constraints.
 PROCESSING_BATCH_SIZE = 5
 
 if __name__ == "__main__":
     print("Starting Wellness & Fitness Audio Annotation Workflow...")
-    # Create a dummy directory and file for demonstration if it doesn't exist
-    if not os.path.exists(AUDIO_FILES_DIR):
-        print(f"Warning: Demo directory '{AUDIO_FILES_DIR}' not found. Please update the path.")
-        # You might want to create a dummy file for testing purposes
-        # os.makedirs(AUDIO_FILES_DIR, exist_ok=True)
-        # print("A dummy directory has been created. Please add your audio files to it.")
     
-    # Check if Gemini is configured before starting
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(FINAL_OUTPUT_JSON), exist_ok=True)
+    print(f"Output directory ensured: {os.path.dirname(FINAL_OUTPUT_JSON)}")
+    
+    # Check if audio directory exists
+    if not os.path.exists(AUDIO_FILES_DIR):
+        print(f"Warning: Audio directory '{AUDIO_FILES_DIR}' not found. Please update the path.")
+        print("Creating the directory structure...")
+        try:
+            os.makedirs(AUDIO_FILES_DIR, exist_ok=True)
+            print(f"Created directory: {AUDIO_FILES_DIR}")
+            print("Please add your audio files to this directory and run the script again.")
+        except Exception as e:
+            print(f"Could not create directory: {e}")
+    
+    # Check if Gemini is configured
     if not is_gemini_configured:
-         print("\nERROR: Gemini API is not configured. The script cannot proceed with annotation.")
-         print("Please ensure your GOOGLE_API_KEY is set up correctly in your environment.")
-    else:
+         print("\n❌ WARNING: Gemini API is not configured. The script will run but skip annotation.")
+         print("   To enable annotation, please:")
+         print("   1. Add your GOOGLE_API_KEY to the .env file, OR")
+         print("   2. Set the GOOGLE_API_KEY environment variable")
+         print("   Processing will continue with transcription and local model analysis only...")
+    
+    # Always run the processing function
+    try:
         process_audio_and_annotate(
             audio_dir=AUDIO_FILES_DIR,
-            output_jsonl_path=FINAL_OUTPUT_JSONL,
+            output_json_path=FINAL_OUTPUT_JSON,
             batch_size=PROCESSING_BATCH_SIZE
         )
+    except Exception as e:
+        print(f"FATAL ERROR during processing: {e}")
+        import traceback
+        traceback.print_exc()
 
     print("Workflow complete.")

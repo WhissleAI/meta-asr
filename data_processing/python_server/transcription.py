@@ -1,8 +1,9 @@
 # applications/transcription.py
 from pathlib import Path
 import asyncio
+import os
 from typing import Tuple, Optional
-from config import logger # Removed WHISSLE_AUTH_TOKEN
+from config import logger, GOOGLE_API_KEY # Removed WHISSLE_AUTH_TOKEN
 from models import GEMINI_AVAILABLE, WHISSLE_AVAILABLE, DEEPGRAM_AVAILABLE # Use *_AVAILABLE flags
 # Removed: from models import DEEPGRAM_CLIENT
 from session_store import get_user_api_key
@@ -40,11 +41,12 @@ async def transcribe_with_whissle_single(audio_path: Path, user_id: str, model_n
 
 async def transcribe_with_gemini_single(audio_path: Path, user_id: str) -> Tuple[Optional[str], Optional[str]]:
     if not GEMINI_AVAILABLE:
-        return None, "Gemini (google.generativeai) library is not available."
+        return None, "Gemini (google.generativeai)/api key is not available."
 
-    gemini_api_key = get_user_api_key(user_id, "gemini")
+    # gemini_api_key = get_user_api_key(user_id, "gemini")
+    gemini_api_key = GOOGLE_API_KEY
     if not gemini_api_key:
-        return None, "Gemini API key not found or session expired for user."
+        return None, None, None, "Gemini API key not found in environment variables."
 
     # Critical: genai.configure is a global setting.
     # This can cause issues in concurrent environments if not handled carefully.

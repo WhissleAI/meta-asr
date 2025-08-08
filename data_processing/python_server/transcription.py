@@ -1,3 +1,6 @@
+
+
+
 # applications/transcription.py
 from pathlib import Path
 import asyncio
@@ -46,7 +49,7 @@ async def transcribe_with_gemini_single(audio_path: Path, user_id: str) -> Tuple
     # gemini_api_key = get_user_api_key(user_id, "gemini")
     gemini_api_key = GOOGLE_API_KEY
     if not gemini_api_key:
-        return None, None, None, "Gemini API key not found in environment variables."
+        return None, "Gemini API key not found in environment variables."  # FIXED: Return 2 elements, not 4
 
     # Critical: genai.configure is a global setting.
     # This can cause issues in concurrent environments if not handled carefully.
@@ -57,17 +60,36 @@ async def transcribe_with_gemini_single(audio_path: Path, user_id: str) -> Tuple
         logger.error(f"Failed to configure Gemini with user API key: {e}")
         return None, "Failed to configure Gemini API with user key."
 
-    model_name = "models/gemini-1.5-flash"
+    model_name = "models/gemini-2.0-flash"
     uploaded_file = None # Ensure uploaded_file is defined for the finally block
     # ... rest of the function remains largely the same, ensure genai calls use the configured key
     logger.info(f"Starting Gemini transcription for {audio_path.name} with model {model_name}...")
+    
+    # Add file verification
+    if not audio_path.exists():
+        return None, f"Audio file does not exist: {audio_path}"
+    
+    file_size = audio_path.stat().st_size
+    logger.info(f"Audio file size: {file_size} bytes")
+    
+    if file_size == 0:
+        return None, f"Audio file is empty: {audio_path}"
+    
     try:
         model = genai.GenerativeModel(model_name)
         mime_type = get_mime_type(audio_path)
+        logger.info(f"Detected MIME type: {mime_type}")
+        
+        logger.info(f"Uploading file to Gemini: {audio_path}")
         uploaded_file = await asyncio.to_thread(genai.upload_file, path=str(audio_path), mime_type=mime_type)
+        logger.info(f"File uploaded successfully. File name: {uploaded_file.name}, Initial state: {uploaded_file.state.name}")
+        
         while uploaded_file.state.name == "PROCESSING":
+            logger.info("File still processing, waiting...")
             await asyncio.sleep(2) # Consider making sleep duration configurable or dynamic
             uploaded_file = await asyncio.to_thread(genai.get_file, name=uploaded_file.name)
+            logger.info(f"File state updated: {uploaded_file.state.name}")
+            
         if uploaded_file.state.name != "ACTIVE":
             error_msg = f"Gemini file processing failed for {audio_path.name}. State: {uploaded_file.state.name}"
             # No need to await asyncio.to_thread for genai.delete_file if it's synchronous
@@ -84,18 +106,61 @@ async def transcribe_with_gemini_single(audio_path: Path, user_id: str) -> Tuple
             except Exception as del_e: logger.warning(f"Could not delete failed Gemini resource {uploaded_file.name}: {del_e}")
             return None, error_msg
         
-        prompt = "Transcribe the audio accurately. Provide only the spoken text. If no speech is detected, return an empty string."
-        # The model.generate_content call will use the globally configured API key
-        response = await asyncio.to_thread(model.generate_content, [prompt, uploaded_file], request_options={'timeout': 300})
+        prompt = """Please transcribe the audio file. Listen carefully to the speech and write down exactly what is being said. 
         
-        try: await asyncio.to_thread(genai.delete_file, name=uploaded_file.name)
-        except Exception as del_e: logger.warning(f"Could not delete Gemini resource {uploaded_file.name} after transcription: {del_e}")
+If you can hear speech, provide the complete transcription of all spoken words.
+If there is no speech or if the audio is silent, respond with: NO_SPEECH_DETECTED
+If you cannot understand the speech clearly, provide your best attempt at transcription.
+
+Transcription:"""
+        logger.info(f"Making Gemini API call with prompt: '{prompt[:40]}'")
+        
+        # The model.generate_content call will use the globally configured API key
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+        
+        response = await asyncio.to_thread(
+            model.generate_content, 
+            [prompt, uploaded_file], 
+            request_options={'timeout': 300},
+            safety_settings=safety_settings
+        )
+        logger.info(f"Received response from Gemini API")
+        logger.info(f"Response type: {type(response)}")
+        
+        try: 
+            await asyncio.to_thread(genai.delete_file, name=uploaded_file.name)
+            logger.info(f"Successfully deleted uploaded file: {uploaded_file.name}")
+        except Exception as del_e: 
+            logger.warning(f"Could not delete Gemini resource {uploaded_file.name} after transcription: {del_e}")
 
         if response.candidates:
             try:
-                if hasattr(response, 'text') and response.text is not None: transcription = response.text.strip()
-                elif response.candidates[0].content.parts: transcription = "".join(part.text for part in response.candidates[0].content.parts).strip()
-                else: return None, "Gemini response candidate found, but no text content."
+                # Add detailed logging for debugging
+                logger.info(f"Gemini response has {len(response.candidates)} candidates")
+                # logger.info(f"Response object attributes: {dir(response)}")
+                # logger.info(f"First candidate attributes: {dir(response.candidates[0])}")
+                
+                transcription = None
+                if hasattr(response, 'text') and response.text is not None: 
+                    transcription = response.text.strip()
+                    logger.info(f"Got transcription from response.text: '{transcription}'")
+                elif response.candidates[0].content.parts: 
+                    transcription = "".join(part.text for part in response.candidates[0].content.parts).strip()
+                    logger.info(f"Got transcription from content.parts: '{transcription}'")
+                    logger.info(f"Number of parts: {len(response.candidates[0].content.parts)}")
+                    for i, part in enumerate(response.candidates[0].content.parts):
+                        logger.info(f"Part {i}: '{part.text}'")
+                else: 
+                    logger.error("Gemini response candidate found, but no text content.")
+                    logger.info(f"Candidate content: {response.candidates[0].content}")
+                    return None, "Gemini response candidate found, but no text content."
+                
+                logger.info(f"Final transcription result: '{transcription}' (length: {len(transcription) if transcription else 0})")
                 return transcription if transcription else "", None # Return empty string if transcription is empty
             except (AttributeError, IndexError, ValueError, TypeError) as resp_e: # More specific exception handling
                 logger.error(f"Error parsing Gemini transcription response for {audio_path.name}: {resp_e}", exc_info=True)

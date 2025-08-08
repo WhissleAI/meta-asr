@@ -74,14 +74,14 @@ async def annotate_text_structured_with_gemini(text_to_annotate: str, custom_pro
     if not text_to_annotate or text_to_annotate.isspace():
         return [], [], "NO_SPEECH_INPUT", None
     prompt = get_annotation_prompt([text_to_annotate.lower()])
-    # if custom_prompt:
-    #     prompt = f"{custom_prompt}\n Sentences to Annotate Now: {json.dumps([text_to_annotate.lower()], ensure_ascii=False, indent=2)}"
-    # else:
-    #     prompt = get_annotation_prompt([text_to_annotate.lower()])
+    if custom_prompt:
+        prompt = f"{custom_prompt}\n Sentences to Annotate Now: {json.dumps([text_to_annotate.lower()], ensure_ascii=False, indent=2)}"
+    else:
+        prompt = get_annotation_prompt([text_to_annotate.lower()])
     # logger.info(f"Using prompt for Gemini annotation in annotation func: {prompt[:100]}...")  # Log first 100 chars to avoid clutter
     logger.info(f"Using prompt for Gemini annotation in annotation func: {prompt[:50]}")  # Log first 100 chars to avoid clutter
     try:
-        model = genai.GenerativeModel("models/gemini-1.5-flash")
+        model = genai.GenerativeModel("models/gemini-2.0-flash")
         safety_settings = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -101,36 +101,41 @@ async def annotate_text_structured_with_gemini(text_to_annotate: str, custom_pro
             logger.info(f"Gemini raw JSON output for BIO: {raw_json_output}")
             try:
                 parsed_data_list = json.loads(raw_json_output)
-                if not isinstance(parsed_data_list, list) or not parsed_data_list:
-                    logger.error(f"Gemini BIO annotation did not return a list or returned an empty list: {raw_json_output}")
-                    return None, None, None, "Gemini BIO: Invalid or empty list format"
-                annotation_object = parsed_data_list[0]
-                tokens = annotation_object.get("tokens")
-                tags = annotation_object.get("tags")
-                intent = annotation_object.get("intent")
-                if not (isinstance(tokens, list) and isinstance(tags, list) and isinstance(intent, str)):
-                    logger.error(f"Gemini BIO: Invalid types for tokens, tags, or intent. Tokens: {type(tokens)}, Tags: {type(tags)}, Intent: {type(intent)}. Tokens: {tokens}, Tags: {tags}")
-                    return None, None, None, "Gemini BIO: Type mismatch in parsed data"
-                # if len(tokens) != len(tags):
-                #     logger.error(f"Gemini BIO: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts. Tokens: {tokens}, Tags: {tags}")
-                #     return None, None, None, "Gemini BIO: Token/Tag count mismatch"
-                if len(tokens) != len(tags):
-                    logger.warning(f"Gemini BIO: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts. Attempting to pad tags.")
-                    # Pad tags if there are fewer tags than tokens
-                    if len(tags) < len(tokens):
-                        tags += ["O"] * (len(tokens) - len(tags))
-                    # Truncate tags if there are more tags than tokens (less common, but handled just in case)
-                    elif len(tags) > len(tokens):
-                        tags = tags[:len(tokens)]
-                    logger.info(f"After padding, Tokens: {tokens}, Tags: {tags}")
-
-                return tokens, tags, intent.upper(), None
             except json.JSONDecodeError as json_e:
-                logger.error(f"Gemini BIO annotation JSON decoding failed: {json_e}. Response: {raw_json_output}")
-                return None, None, None, f"Gemini BIO: JSONDecodeError - {json_e}"
+                # Attempt to fix trailing braces/brackets
+                fixed_output = re.sub(r'}}\s*\]$', '}]', raw_json_output)
+                try:
+                    parsed_data_list = json.loads(fixed_output)
+                except Exception as e2:
+                    logger.error(f"Gemini BIO annotation JSON decoding failed after fix: {e2}. Response: {raw_json_output}")
+                    return None, None, None, f"Gemini BIO: JSONDecodeError - {json_e}"
             except Exception as e:
                 logger.error(f"Error parsing Gemini BIO annotation response: {e}. Response: {raw_json_output}")
                 return None, None, None, f"Gemini BIO: Parsing error - {e}"
+            if not isinstance(parsed_data_list, list) or not parsed_data_list:
+                logger.error(f"Gemini BIO annotation did not return a list or returned an empty list: {raw_json_output}")
+                return None, None, None, "Gemini BIO: Invalid or empty list format"
+            annotation_object = parsed_data_list[0]
+            tokens = annotation_object.get("tokens")
+            tags = annotation_object.get("tags")
+            intent = annotation_object.get("intent")
+            if not (isinstance(tokens, list) and isinstance(tags, list) and isinstance(intent, str)):
+                logger.error(f"Gemini BIO: Invalid types for tokens, tags, or intent. Tokens: {type(tokens)}, Tags: {type(tags)}, Intent: {type(intent)}. Tokens: {tokens}, Tags: {tags}")
+                return None, None, None, "Gemini BIO: Type mismatch in parsed data"
+            # if len(tokens) != len(tags):
+            #     logger.error(f"Gemini BIO: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts. Tokens: {tokens}, Tags: {tags}")
+            #     return None, None, None, "Gemini BIO: Token/Tag count mismatch"
+            if len(tokens) != len(tags):
+                logger.warning(f"Gemini BIO: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts. Attempting to pad tags.")
+                # Pad tags if there are fewer tags than tokens
+                if len(tags) < len(tokens):
+                    tags += ["O"] * (len(tokens) - len(tags))
+                # Truncate tags if there are more tags than tokens (less common, but handled just in case)
+                elif len(tags) > len(tokens):
+                    tags = tags[:len(tokens)]
+                logger.info(f"After padding, Tokens: {tokens}, Tags: {tags}")
+
+            return tokens, tags, intent.upper(), None
         else:
             error_message = f"No candidates from Gemini BIO annotation for text: {text_to_annotate[:100]}..."
             if hasattr(response, 'prompt_feedback') and response.prompt_feedback:

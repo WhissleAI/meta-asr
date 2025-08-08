@@ -23,6 +23,9 @@ def predict_emotion(audio_data, sampling_rate):
     # Dummy placeholder, replace with actual import if needed
     pass
 
+
+# *********
+
 async def _process_single_downloaded_file(
     local_audio_path: Path,
     user_id: str,
@@ -56,7 +59,7 @@ async def _process_single_downloaded_file(
         "emotion": [],
         "bio_annotation_gemini": [],
         "gemini_intent": [],
-        # "prompt_used": None,
+        "prompt_used": None,
         "error_details": [],
         "overall_error_summary": None
     }
@@ -129,6 +132,8 @@ async def _process_single_downloaded_file(
             "gemini_intent": None,
             "error_details": []
         }
+        transcription_text: Optional[str] = None  # Ensure variable is always defined
+        transcription_error: Optional[str] = None
         await websocket_manager.send_personal_message({"status": "segment_processing_started", "detail": f"Processing segment: {segment_path.name}"}, user_id)
 
         # Segment Duration
@@ -142,43 +147,42 @@ async def _process_single_downloaded_file(
             await websocket_manager.send_personal_message({"status": "segment_error", "detail": f"Failed to get segment duration: {str(e)}"}, user_id)
 
         # Transcription
-        if not get_user_api_key(user_id, transcription_provider_name):
-            err_msg = f"TranscriptionError: API key for {transcription_provider_name.capitalize()} not found or session expired."
+        # if not get_user_api_key(user_id, transcription_provider_name):
+        #     err_msg = f"TranscriptionError: API key for {transcription_provider_name.capitalize()} not found or session expired."
+        #     segment_result["error_details"].append(err_msg)
+        #     await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": err_msg}, user_id)
+        # else:
+        try:
+            await websocket_manager.send_personal_message({"status": "transcription_started", "detail": f"Transcribing segment with {transcription_provider_name.capitalize()}..."}, user_id)
+            transcription_text = None
+            transcription_error = None
+            if model_choice == ModelChoice.whissle:
+                transcription_text, transcription_error = await transcribe_with_whissle_single(segment_path, user_id)
+            elif model_choice == ModelChoice.gemini:
+                transcription_text, transcription_error = await transcribe_with_gemini_single(segment_path, user_id)
+            elif model_choice == ModelChoice.deepgram:
+                transcription_text, transcription_error = await transcribe_with_deepgram_single(segment_path, user_id)
+            else:
+                transcription_error = "Invalid transcription model choice."
+            if transcription_error:
+                segment_result["error_details"].append(f"TranscriptionError: {transcription_error}")
+                await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": transcription_error}, user_id)
+            elif transcription_text is None:
+                segment_result["error_details"].append("TranscriptionError: Transcription returned None without an explicit error.")
+                await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": "Transcription returned no text."}, user_id)
+            else:
+                segment_result["transcription"] = transcription_text
+                results["transcription"].append(transcription_text)
+                await websocket_manager.send_personal_message({
+                    "status": "transcription_complete",
+                    "detail": "Segment transcription successful.",
+                    "data": {"transcription": transcription_text[:100] + "..." if len(transcription_text) > 100 else transcription_text}
+                }, user_id)
+        except Exception as e:
+            logger.error(f"User {user_id} - Transcription failed for segment {segment_path.name}: {e}", exc_info=True)
+            err_msg = f"TranscriptionError: Unexpected error - {type(e).__name__}: {str(e)}"
             segment_result["error_details"].append(err_msg)
             await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": err_msg}, user_id)
-        else:
-            try:
-                await websocket_manager.send_personal_message({"status": "transcription_started", "detail": f"Transcribing segment with {transcription_provider_name.capitalize()}..."}, user_id)
-                transcription_text: Optional[str] = None
-                transcription_error: Optional[str] = None
-                if model_choice == ModelChoice.whissle:
-                    transcription_text, transcription_error = await transcribe_with_whissle_single(segment_path, user_id)
-                elif model_choice == ModelChoice.gemini:
-                    transcription_text, transcription_error = await transcribe_with_gemini_single(segment_path, user_id)
-                elif model_choice == ModelChoice.deepgram:
-                    transcription_text, transcription_error = await transcribe_with_deepgram_single(segment_path, user_id)
-                else:
-                    transcription_error = "Invalid transcription model choice."
-
-                if transcription_error:
-                    segment_result["error_details"].append(f"TranscriptionError: {transcription_error}")
-                    await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": transcription_error}, user_id)
-                elif transcription_text is None:
-                    segment_result["error_details"].append("TranscriptionError: Transcription returned None without an explicit error.")
-                    await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": "Transcription returned no text."}, user_id)
-                else:
-                    segment_result["transcription"] = transcription_text
-                    results["transcription"].append(transcription_text)
-                    await websocket_manager.send_personal_message({
-                        "status": "transcription_complete",
-                        "detail": "Segment transcription successful.",
-                        "data": {"transcription": transcription_text[:100] + "..." if len(transcription_text) > 100 else transcription_text}
-                    }, user_id)
-            except Exception as e:
-                logger.error(f"User {user_id} - Transcription failed for segment {segment_path.name}: {e}", exc_info=True)
-                err_msg = f"TranscriptionError: Unexpected error - {type(e).__name__}: {str(e)}"
-                segment_result["error_details"].append(err_msg)
-                await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": err_msg}, user_id)
 
         # Annotations
         if transcription_text and requested_annotations:
@@ -265,11 +269,11 @@ async def _process_single_downloaded_file(
             if requires_gemini_for_annotation and transcription_text:
                 await websocket_manager.send_personal_message({"status": "gemini_annotation_started", "detail": "Starting Gemini entity/intent annotation for segment..."}, user_id)
                 if not GEMINI_AVAILABLE:
-                    segment_result["error_details"].append("GeminiAnnotationError: Gemini SDK not available.")
+                    segment_result["error_details"].append("GeminiAnnotationError: Gemini SDK/api not available.")
                     await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": "Gemini SDK not available."}, user_id)
-                elif not get_user_api_key(user_id, "gemini"):
-                    segment_result["error_details"].append("GeminiAnnotationError: Gemini API key not found or session expired.")
-                    await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": "Gemini API key not found or session expired."}, user_id)
+                # elif not get_user_api_key(user_id, "gemini"):
+                #     segment_result["error_details"].append("GeminiAnnotationError: Gemini API key not found or session expired.")
+                #     await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": "Gemini API key not found or session expired."}, user_id)
                 else:
                     try:
                         tokens, tags, intent, gemini_err = await annotate_text_structured_with_gemini(
@@ -295,7 +299,7 @@ async def _process_single_downloaded_file(
                                 "data": {
                                     "bio_annotation_gemini": segment_result["bio_annotation_gemini"],
                                     "gemini_intent": segment_result["gemini_intent"],
-                                    "prompt_used": segment_result["prompt_used"]
+                                    # "prompt_used": segment_result["prompt_used"]
                                 }
                             }, user_id)
                     except Exception as e:

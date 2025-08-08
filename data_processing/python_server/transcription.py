@@ -60,6 +60,7 @@ async def transcribe_with_gemini_single(audio_path: Path, user_id: str) -> Tuple
     model_name = "models/gemini-1.5-flash"
     uploaded_file = None # Ensure uploaded_file is defined for the finally block
     # ... rest of the function remains largely the same, ensure genai calls use the configured key
+    logger.info(f"Starting Gemini transcription for {audio_path.name} with model {model_name}...")
     try:
         model = genai.GenerativeModel(model_name)
         mime_type = get_mime_type(audio_path)

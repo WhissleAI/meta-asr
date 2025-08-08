@@ -79,7 +79,7 @@ async def annotate_text_structured_with_gemini(text_to_annotate: str, custom_pro
     # else:
     #     prompt = get_annotation_prompt([text_to_annotate.lower()])
     # logger.info(f"Using prompt for Gemini annotation in annotation func: {prompt[:100]}...")  # Log first 100 chars to avoid clutter
-    logger.info(f"Using prompt for Gemini annotation in annotation func: {prompt}")  # Log first 100 chars to avoid clutter
+    logger.info(f"Using prompt for Gemini annotation in annotation func: {prompt[:50]}")  # Log first 100 chars to avoid clutter
     try:
         model = genai.GenerativeModel("models/gemini-1.5-flash")
         safety_settings = [

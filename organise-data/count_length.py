@@ -54,7 +54,7 @@ def calculate_total_duration(jsonl_file_path):
     }
 
 # Use this function with your JSONL file
-jsonl_file_path = "/external3/databases/NPTEL2020-Indian-English-Speech-Dataset/nptel-test/nptel_english_annotated.jsonl"
+jsonl_file_path = "/external4/datasets/bucket_data/wellness/wellness_fitness_annotated.jsonl"
  # Replace with your actual file path
 result = calculate_total_duration(jsonl_file_path)
 

@@ -11,7 +11,8 @@ with open(output_jsonl_path, 'w', encoding='utf-8') as outfile:
     for item in data:
         output_obj = {
             'audio_filepath': item.get('audio_filepath'),
-            'text': item.get('text')
+            'text': item.get('text'),
+            'duration': item.get('duration')  # Default to 0 if duration is not present
         }
         outfile.write(json.dumps(output_obj, ensure_ascii=False) + '\n')
 

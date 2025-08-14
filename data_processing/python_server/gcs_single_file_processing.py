@@ -1,27 +1,62 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import numpy as np
+import torch
 from config import (
-    ModelChoice, TARGET_SAMPLE_RATE, BioAnnotation, logger
+    ModelChoice, TARGET_SAMPLE_RATE, BioAnnotation, logger, device
 )
 from audio_utils import get_audio_duration, trim_audio, load_audio
 from session_store import get_user_api_key
 from websocket_utils import manager as websocket_manager
 from annotation import annotate_text_structured_with_gemini
-from models import GEMINI_AVAILABLE
+from models import (
+    GEMINI_AVAILABLE, # Updated to _AVAILABLE flags
+    age_gender_model, age_gender_processor,
+    emotion_model, emotion_feature_extractor 
+)
 from transcription import transcribe_with_whissle_single, transcribe_with_gemini_single, transcribe_with_deepgram_single
 
 
-def predict_age_gender(audio_data, sampling_rate):
-    # Dummy placeholder, replace with actual import if needed
-    pass
+def predict_age_gender(audio_data, sampling_rate) -> Tuple[Optional[float], Optional[int], Optional[str]]:
+    if age_gender_model is None or age_gender_processor is None:
+        return None, None, "Age/Gender model not loaded."
+    if audio_data is None or len(audio_data) == 0:
+        return None, None, "Empty audio data provided for Age/Gender."
+    try:
+        inputs = age_gender_processor(audio_data, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
+        input_values = inputs.input_values.to(device)
+        with torch.no_grad():
+            outputs = age_gender_model(input_values)
+        age_pred = outputs[1].detach().cpu().numpy().flatten()[0]
+        gender_logits = outputs[2].detach().cpu().numpy()
+        gender_pred_idx = np.argmax(gender_logits, axis=1)[0]
+        return float(age_pred), int(gender_pred_idx), None
+    except Exception as e:
+        logger.error(f"Error during Age/Gender prediction: {e}", exc_info=False)
+        return None, None, f"Age/Gender prediction failed: {type(e).__name__}"
 
-
-def predict_emotion(audio_data, sampling_rate):
-    # Dummy placeholder, replace with actual import if needed
-    pass
+def predict_emotion(audio_data, sampling_rate) -> Tuple[Optional[str], Optional[str]]:
+    if emotion_model is None or emotion_feature_extractor is None:
+        return None, "Emotion model not loaded."
+    if audio_data is None or len(audio_data) == 0:
+        return None, "Empty audio data provided for Emotion."
+    min_length = int(sampling_rate * 0.1)
+    if len(audio_data) < min_length:
+        return "SHORT_AUDIO", None
+    try:
+        inputs = emotion_feature_extractor(audio_data, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
+        inputs = {key: val.to(device) for key, val in inputs.items()}
+        with torch.no_grad():
+            outputs = emotion_model(**inputs)
+        logits = outputs.logits
+        predicted_class_idx = torch.argmax(logits, dim=-1).item()
+        emotion_label = emotion_model.config.id2label.get(predicted_class_idx, "UNKNOWN_EMOTION")
+        return emotion_label, None
+    except Exception as e:
+        logger.error(f"Error during Emotion prediction: {e}", exc_info=False)
+        return None, f"Emotion prediction failed: {type(e).__name__}"
 
 
 # *********

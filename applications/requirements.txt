@@ -16,3 +16,4 @@ typing-extensions
 deepgram-sdk
 google-cloud-storage
 pydub
+huggingface_hub

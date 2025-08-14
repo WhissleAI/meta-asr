@@ -53,6 +53,28 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         return hidden_states, logits_age, logits_gender
 
 # Load models and configure APIs
+
+try:
+    logger.info("Loading Age/Gender model...")
+    age_gender_model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
+    age_gender_processor = Wav2Vec2Processor.from_pretrained(age_gender_model_name)
+    age_gender_model = AgeGenderModel.from_pretrained(age_gender_model_name).to(device)
+    age_gender_model.eval()
+    logger.info("Age/Gender model loaded successfully.")
+except Exception as e:
+    logger.error(f"Failed to load Age/Gender model: {e}", exc_info=True)
+
+try:
+    logger.info("Loading Emotion model...")
+    emotion_model_name = "superb/hubert-large-superb-er"
+    emotion_feature_extractor = AutoFeatureExtractor.from_pretrained(emotion_model_name)
+    emotion_model = AutoModelForAudioClassification.from_pretrained(emotion_model_name).to(device)
+    emotion_model.eval()
+    logger.info("Emotion model loaded successfully.")
+except Exception as e:
+    logger.error(f"Failed to load Emotion model: {e}", exc_info=True)
+
+
 try:
     logger.info("Attempting to import google.generativeai for Gemini...")
     import google.generativeai as genai

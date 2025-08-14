@@ -34,7 +34,7 @@ from session_store import init_user_session, is_user_session_valid, get_user_api
 from gcs_utils import parse_gcs_path, download_gcs_blob # Added
 from websocket_utils import manager as websocket_manager # Added WebSocket manager
 from gcs_batch_processing import process_gcs_directory
-
+from gcs_single_file_processing import _process_single_downloaded_file
 
 
 
@@ -566,16 +566,16 @@ async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
 
     if not transcription_service_available:
         raise HTTPException(status_code=400, detail=f"{transcription_provider_name.capitalize()} SDK for transcription is not available on the server.")
-    if not get_user_api_key(user_id, transcription_provider_name):
-        raise HTTPException(status_code=400, detail=f"API key for {transcription_provider_name.capitalize()} (transcription) not found for user or session expired.")
+    # if not get_user_api_key(user_id, transcription_provider_name):
+    #     raise HTTPException(status_code=400, detail=f"API key for {transcription_provider_name.capitalize()} (transcription) not found for user or session expired.")
 
     # Check Gemini availability for annotation if needed
     requires_gemini_for_annotation = process_request.annotations and any(a in ["entity", "intent"] for a in process_request.annotations)
     if requires_gemini_for_annotation:
         if not GEMINI_AVAILABLE:
             raise HTTPException(status_code=400, detail="Gemini SDK for annotation is not available on the server.")
-        if not get_user_api_key(user_id, "gemini"):
-            raise HTTPException(status_code=400, detail="Gemini API key for annotation not found for user or session expired.")
+        # if not get_user_api_key(user_id, "gemini"):
+        #     raise HTTPException(status_code=400, detail="Gemini API key for annotation not found for user or session expired.")
 
     logger.info(f"User {user_id} - Received annotated request with prompt: {process_request.prompt[:100] if process_request.prompt else 'None'}")
 
@@ -756,337 +756,21 @@ async def create_annotated_manifest_endpoint(process_request: ProcessRequest):
 
 
 
-async def _process_single_downloaded_file(
-    local_audio_path: Path,
-    user_id: str,
-    model_choice: ModelChoice,
-    requested_annotations: Optional[List[str]],
-    custom_prompt: Optional[str],
-    output_jsonl_path: Path,
-    original_gcs_path: str
-) -> Dict[str, Any]:
-    """
-    Processes a single downloaded audio file by chunking (if >30s), transcribing, and optionally annotating.
-    Sends progress updates via WebSocket and returns aggregated results for all segments.
-    
-    Args:
-        local_audio_path: Path to the downloaded audio file.
-        user_id: User identifier for API key and WebSocket communication.
-        model_choice: Selected transcription model (whissle, gemini, deepgram).
-        requested_annotations: List of requested annotations (e.g., entity, intent, age, gender, emotion).
-        custom_prompt: Optional custom prompt for Gemini annotation.
-        output_jsonl_path: Path to save JSONL results.
-        original_gcs_path: Original GCS path for reference in output.
-    
-    Returns:
-        Dictionary containing aggregated results and errors across all segments.
-    """
-    results: Dict[str, Any] = {
-        "duration": None,
-        "transcription": [],
-        "age_group": [],
-        "gender": [],
-        "emotion": [],
-        "bio_annotation_gemini": [],
-        "gemini_intent": [],
-        "prompt_used": None,
-        "error_details": [],
-        "overall_error_summary": None
-    }
-    segment_results = []  # Store results for each segment
-    await websocket_manager.send_personal_message({"status": "processing_started", "detail": f"Processing file: {local_audio_path.name}"}, user_id)
-
-    # --- Duration ---
-    try:
-        await websocket_manager.send_personal_message({"status": "calculating_duration", "detail": "Calculating audio duration..."}, user_id)
-        duration = await asyncio.to_thread(get_audio_duration, local_audio_path)
-        results["duration"] = duration
-        await websocket_manager.send_personal_message({"status": "duration_complete", "detail": f"Duration: {duration:.2f}s"}, user_id)
-    except Exception as e:
-        logger.error(f"User {user_id} - Failed to get duration for {local_audio_path.name}: {e}")
-        results["error_details"].append(f"DurationError: {str(e)}")
-        await websocket_manager.send_personal_message({"status": "error", "detail": f"Failed to get duration: {str(e)}"}, user_id)
-        return results  # Early return if duration fails
-
-    # --- Trim Audio ---
-    segment_length_ms = 30 * 1000  # 30 seconds
-    
-    # Extract the filename from GCS path (last part after '/')
-    gcs_filename = Path(original_gcs_path).stem  # Gets filename without extension
-    # Create safe directory name from GCS filename
-    safe_gcs_filename = "".join(c for c in gcs_filename if c.isalnum() or c in ['-', '_'])
-    if not safe_gcs_filename:  # Fallback if filename becomes empty after sanitization
-        safe_gcs_filename = "audio_segments"
-
-    # Create subdirectory inside the user-provided output path
-    # output_jsonl_path already contains the full user-provided path
-    segments_dir = output_jsonl_path / safe_gcs_filename
-    segments_dir.mkdir(parents=True, exist_ok=True)
-
-    # Update paths
-    trimmed_audio_dir = segments_dir / "segments"  # Audio segments go in 'segments' subfolder
-    trimmed_audio_dir.mkdir(parents=True, exist_ok=True)
-    output_jsonl_path = segments_dir / "annotations.jsonl"  # JSONL goes in the main subfolder
-
-    await websocket_manager.send_personal_message({
-        "status": "trimming_started", 
-        "detail": f"Creating segments directory: {segments_dir}"
-    }, user_id)
-    try:
-        trimmed_segments = await asyncio.to_thread(trim_audio, local_audio_path, segment_length_ms, trimmed_audio_dir)
-        if not trimmed_segments:
-            results["error_details"].append(f"TrimmingError: No segments created for {local_audio_path.name}")
-            await websocket_manager.send_personal_message({"status": "trimming_failed", "detail": "No segments created."}, user_id)
-            return results
-        await websocket_manager.send_personal_message({"status": "trimming_complete", "detail": f"Created {len(trimmed_segments)} segment(s)."}, user_id)
-    except Exception as e:
-        logger.error(f"User {user_id} - Failed to trim {local_audio_path.name}: {e}")
-        results["error_details"].append(f"TrimmingError: {str(e)}")
-        await websocket_manager.send_personal_message({"status": "trimming_failed", "detail": f"Failed to trim audio: {str(e)}"}, user_id)
-        return results
-
-    # --- Process Each Segment ---
-    transcription_provider_name = model_choice.value
-    requires_gemini_for_annotation = requested_annotations and any(a in ["entity", "intent"] for a in requested_annotations)
-    needs_local_models = requested_annotations and any(a in ["age", "gender", "emotion"] for a in requested_annotations)
-
-    for segment_path in trimmed_segments:
-        segment_result: Dict[str, Any] = {
-            "segment_path": str(segment_path),
-            "duration": None,
-            "transcription": None,
-            "age_group": None,
-            "gender": None,
-            "emotion": None,
-            "bio_annotation_gemini": None,
-            "gemini_intent": None,
-            "error_details": []
-        }
-        await websocket_manager.send_personal_message({"status": "segment_processing_started", "detail": f"Processing segment: {segment_path.name}"}, user_id)
-
-        # Segment Duration
-        try:
-            segment_duration = await asyncio.to_thread(get_audio_duration, segment_path)
-            segment_result["duration"] = segment_duration
-            await websocket_manager.send_personal_message({"status": "segment_duration_complete", "detail": f"Segment duration: {segment_duration:.2f}s"}, user_id)
-        except Exception as e:
-            logger.error(f"User {user_id} - Failed to get duration for segment {segment_path.name}: {e}")
-            segment_result["error_details"].append(f"SegmentDurationError: {str(e)}")
-            await websocket_manager.send_personal_message({"status": "segment_error", "detail": f"Failed to get segment duration: {str(e)}"}, user_id)
-
-        # Transcription
-        if not get_user_api_key(user_id, transcription_provider_name):
-            err_msg = f"TranscriptionError: API key for {transcription_provider_name.capitalize()} not found or session expired."
-            segment_result["error_details"].append(err_msg)
-            await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": err_msg}, user_id)
-        else:
-            try:
-                await websocket_manager.send_personal_message({"status": "transcription_started", "detail": f"Transcribing segment with {transcription_provider_name.capitalize()}..."}, user_id)
-                transcription_text: Optional[str] = None
-                transcription_error: Optional[str] = None
-                if model_choice == ModelChoice.whissle:
-                    transcription_text, transcription_error = await transcribe_with_whissle_single(segment_path, user_id)
-                elif model_choice == ModelChoice.gemini:
-                    transcription_text, transcription_error = await transcribe_with_gemini_single(segment_path, user_id)
-                elif model_choice == ModelChoice.deepgram:
-                    transcription_text, transcription_error = await transcribe_with_deepgram_single(segment_path, user_id)
-                else:
-                    transcription_error = "Invalid transcription model choice."
-
-                if transcription_error:
-                    segment_result["error_details"].append(f"TranscriptionError: {transcription_error}")
-                    await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": transcription_error}, user_id)
-                elif transcription_text is None:
-                    segment_result["error_details"].append("TranscriptionError: Transcription returned None without an explicit error.")
-                    await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": "Transcription returned no text."}, user_id)
-                else:
-                    segment_result["transcription"] = transcription_text
-                    results["transcription"].append(transcription_text)
-                    await websocket_manager.send_personal_message({
-                        "status": "transcription_complete",
-                        "detail": "Segment transcription successful.",
-                        "data": {"transcription": transcription_text[:100] + "..." if len(transcription_text) > 100 else transcription_text}
-                    }, user_id)
-            except Exception as e:
-                logger.error(f"User {user_id} - Transcription failed for segment {segment_path.name}: {e}", exc_info=True)
-                err_msg = f"TranscriptionError: Unexpected error - {type(e).__name__}: {str(e)}"
-                segment_result["error_details"].append(err_msg)
-                await websocket_manager.send_personal_message({"status": "transcription_failed", "detail": err_msg}, user_id)
-
-        # Annotations
-        if transcription_text and requested_annotations:
-            await websocket_manager.send_personal_message({"status": "annotation_started", "detail": f"Annotating segment {segment_path.name}..."}, user_id)
-
-            # Load audio for age/gender/emotion
-            audio_data: Optional[np.ndarray] = None
-            sample_rate: Optional[int] = None
-            if needs_local_models:
-                await websocket_manager.send_personal_message({"status": "audio_loading", "detail": "Loading segment audio for age/gender/emotion..."}, user_id)
-                audio_data, sample_rate, load_err = await asyncio.to_thread(load_audio, segment_path)
-                if load_err:
-                    segment_result["error_details"].append(f"AudioLoadError: {load_err}")
-                    await websocket_manager.send_personal_message({"status": "audio_load_failed", "detail": load_err}, user_id)
-                elif audio_data is None or sample_rate != TARGET_SAMPLE_RATE:
-                    segment_result["error_details"].append("AudioLoadError: Audio load failed or sample rate mismatch.")
-                    await websocket_manager.send_personal_message({"status": "audio_load_failed", "detail": "Audio load failed or sample rate mismatch."}, user_id)
-                else:
-                    await websocket_manager.send_personal_message({"status": "audio_load_complete", "detail": "Segment audio loaded successfully."}, user_id)
-
-            # Age/Gender and Emotion Processing
-            if audio_data is not None and sample_rate == TARGET_SAMPLE_RATE:
-                tasks = []
-                if any(a in ["age", "gender"] for a in requested_annotations) and 'age_gender_model' in globals():
-                    await websocket_manager.send_personal_message({"status": "age_gender_started", "detail": "Processing age/gender for segment..."}, user_id)
-                    tasks.append(asyncio.to_thread(predict_age_gender, audio_data, TARGET_SAMPLE_RATE))
-                if "emotion" in requested_annotations and 'emotion_model' in globals():
-                    await websocket_manager.send_personal_message({"status": "emotion_started", "detail": "Processing emotion for segment..."}, user_id)
-                    tasks.append(asyncio.to_thread(predict_emotion, audio_data, TARGET_SAMPLE_RATE))
-
-                if tasks:
-                    try:
-                        task_results = await asyncio.gather(*tasks, return_exceptions=True)
-                        for result in task_results:
-                            if isinstance(result, Exception):
-                                segment_result["error_details"].append(f"AnnotationError: {type(result).__name__}")
-                                await websocket_manager.send_personal_message({"status": "annotation_failed", "detail": f"Annotation subtask error: {type(result).__name__}"}, user_id)
-                                continue
-
-                            if isinstance(result, tuple) and len(result) == 3:  # Age/Gender
-                                age_pred, gender_idx, age_gender_err = result
-                                if age_gender_err:
-                                    segment_result["error_details"].append(f"AgeGenderError: {age_gender_err}")
-                                    await websocket_manager.send_personal_message({"status": "age_gender_failed", "detail": age_gender_err}, user_id)
-                                else:
-                                    if "age" in requested_annotations and age_pred is not None:
-                                        actual_age = round(age_pred, 1)
-                                        age_brackets = [(18, "0-17"), (25, "18-24"), (35, "25-34"), (45, "35-44"), (55, "45-54"), (65, "55-64"), (float('inf'), "65+")]
-                                        age_group = "Unknown"
-                                        for threshold, bracket in age_brackets:
-                                            if actual_age < threshold:
-                                                age_group = bracket
-                                                break
-                                        segment_result["age_group"] = age_group
-                                        results["age_group"].append(age_group)
-                                    if "gender" in requested_annotations and gender_idx is not None:
-                                        gender_str = "Unknown"
-                                        if gender_idx == 1:
-                                            gender_str = "Male"
-                                        elif gender_idx == 0:
-                                            gender_str = "Female"
-                                        segment_result["gender"] = gender_str
-                                        results["gender"].append(gender_str)
-                                    await websocket_manager.send_personal_message({
-                                        "status": "age_gender_complete",
-                                        "data": {"age_group": segment_result["age_group"], "gender": segment_result["gender"]}
-                                    }, user_id)
-                            elif isinstance(result, tuple) and len(result) == 2:  # Emotion
-                                emotion_label, emotion_err = result
-                                if emotion_err:
-                                    segment_result["error_details"].append(f"EmotionError: {emotion_err}")
-                                    await websocket_manager.send_personal_message({"status": "emotion_failed", "detail": emotion_err}, user_id)
-                                elif "emotion" in requested_annotations and emotion_label is not None:
-                                    emotion = emotion_label.replace("_", " ").title() if emotion_label != "SHORT_AUDIO" else "Short Audio"
-                                    segment_result["emotion"] = emotion
-                                    results["emotion"].append(emotion)
-                                    await websocket_manager.send_personal_message({"status": "emotion_complete", "data": {"emotion": emotion}}, user_id)
-                    except Exception as e:
-                        logger.error(f"User {user_id} - Error in A/G/E tasks for segment {segment_path.name}: {e}")
-                        segment_result["error_details"].append(f"AnnotationError: {type(e).__name__}: {e}")
-                        await websocket_manager.send_personal_message({"status": "annotation_failed", "detail": f"Annotation subtask error: {e}"}, user_id)
-
-            # Gemini Annotation
-            if requires_gemini_for_annotation and transcription_text:
-                await websocket_manager.send_personal_message({"status": "gemini_annotation_started", "detail": "Starting Gemini entity/intent annotation for segment..."}, user_id)
-                if not GEMINI_AVAILABLE:
-                    segment_result["error_details"].append("GeminiAnnotationError: Gemini SDK not available.")
-                    await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": "Gemini SDK not available."}, user_id)
-                elif not get_user_api_key(user_id, "gemini"):
-                    segment_result["error_details"].append("GeminiAnnotationError: Gemini API key not found or session expired.")
-                    await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": "Gemini API key not found or session expired."}, user_id)
-                else:
-                    try:
-                        tokens, tags, intent, gemini_err = await annotate_text_structured_with_gemini(
-                            transcription_text,
-                            custom_prompt=custom_prompt,
-                            user_id=user_id
-                        )
-                        if gemini_err:
-                            segment_result["error_details"].append(f"GeminiAnnotationError: {gemini_err}")
-                            await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": gemini_err}, user_id)
-                            if "intent" in requested_annotations:
-                                segment_result["gemini_intent"] = "ANNOTATION_FAILED"
-                        else:
-                            segment_result["prompt_used"] = custom_prompt if custom_prompt else "default_generated_prompt_behavior"
-                            if "entity" in requested_annotations and tokens and tags:
-                                segment_result["bio_annotation_gemini"] = BioAnnotation(tokens=tokens, tags=tags).dict()
-                                results["bio_annotation_gemini"].append(segment_result["bio_annotation_gemini"])
-                            if "intent" in requested_annotations and intent:
-                                segment_result["gemini_intent"] = intent
-                                results["gemini_intent"].append(intent)
-                            await websocket_manager.send_personal_message({
-                                "status": "gemini_annotation_complete",
-                                "data": {
-                                    "bio_annotation_gemini": segment_result["bio_annotation_gemini"],
-                                    "gemini_intent": segment_result["gemini_intent"],
-                                    "prompt_used": segment_result["prompt_used"]
-                                }
-                            }, user_id)
-                    except Exception as e:
-                        logger.error(f"User {user_id} - Gemini annotation failed for segment {segment_path.name}: {e}", exc_info=True)
-                        segment_result["error_details"].append(f"GeminiAnnotationError: {type(e).__name__}: {str(e)}")
-                        await websocket_manager.send_personal_message({"status": "gemini_annotation_failed", "detail": f"Gemini annotation error: {e}"}, user_id)
-                        if "intent" in requested_annotations:
-                            segment_result["gemini_intent"] = "ANNOTATION_FAILED"
-
-            elif requested_annotations and not transcription_text:
-                segment_result["error_details"].append("AnnotationSkipped: Transcription failed or was empty.")
-                await websocket_manager.send_personal_message({"status": "annotation_skipped", "detail": "Transcription failed or was empty, skipping annotations."}, user_id)
-
-            await websocket_manager.send_personal_message({"status": "segment_annotation_complete", "detail": f"Annotations complete for segment {segment_path.name}."}, user_id)
-
-        # Save Segment Result
-        try:
-            record = {
-                "audio_filepath": str(segment_path),
-                "original_gcs_path": original_gcs_path,
-                "text": segment_result["transcription"],
-                "duration": segment_result["duration"],
-                "model_used_for_transcription": model_choice.value,
-                "age_group": segment_result["age_group"],
-                "gender": segment_result["gender"],
-                "emotion": segment_result["emotion"],
-                "bio_annotation_gemini": segment_result["bio_annotation_gemini"],
-                "gemini_intent": segment_result["gemini_intent"],
-                "prompt_used": segment_result["prompt_used"],
-                "error": "; ".join(segment_result["error_details"]) if segment_result["error_details"] else None
-            }
-            record = {k: v for k, v in record.items() if v is not None}
-            with open(output_jsonl_path, 'a', encoding='utf-8') as f_out:
-                json.dump(record, f_out, ensure_ascii=False)
-                f_out.write('\n')
-            await websocket_manager.send_personal_message({"status": "segment_result_saved", "detail": f"Segment result saved to {output_jsonl_path.name}"}, user_id)
-            segment_results.append(segment_result)
-        except Exception as e:
-            logger.error(f"User {user_id} - Failed to save segment result for {segment_path.name}: {e}")
-            segment_result["error_details"].append(f"SaveError: {str(e)}")
-            await websocket_manager.send_personal_message({"status": "save_failed", "detail": f"Failed to save segment result: {str(e)}"}, user_id)
-
-        # Aggregate errors
-        if segment_result["error_details"]:
-            results["error_details"].extend(segment_result["error_details"])
-
-    # Finalize Results
-    results["overall_error_summary"] = "; ".join(results["error_details"]) if results["error_details"] else None
-    if results["overall_error_summary"]:
-        await websocket_manager.send_personal_message({"status": "processing_failed", "detail": results["overall_error_summary"], "data": results}, user_id)
-    else:
-        await websocket_manager.send_personal_message({"status": "processing_complete", "detail": "All processing finished successfully.", "data": results}, user_id)
-
-    return results
-
 
 @router.post("/process_gcs_file/", response_model=SingleFileProcessResponse, summary="Download, Chunk, Transcribe, and Optionally Annotate GCS File")
 async def process_gcs_file_endpoint(request: GcsProcessRequest):
+    """
+    Downloads an audio file from GCS, chunks it if >30s, transcribes, and optionally annotates segments.
+    Saves results to a JSONL file and returns processing details.
+
+    Args:
+        request: Contains user_id, gcs_path, output_jsonl_path, model_choice, annotations, and optional prompt.
+
+    Returns:
+        SingleFileProcessResponse with processing results and status.
+    """
+    user_id = request.user_id
+    # The output path
     """
     Downloads an audio file from GCS, chunks it if >30s, transcribes, and optionally annotates segments.
     Saves results to a JSONL file and returns processing details.
@@ -1104,14 +788,14 @@ async def process_gcs_file_endpoint(request: GcsProcessRequest):
    
     await websocket_manager.send_personal_message({"status": "request_received", "detail": f"Received request for {request.gcs_path}"}, user_id)
 
-    if not is_user_session_valid(user_id):
-        logger.warning(f"User {user_id} - Invalid or expired session.")
-        await websocket_manager.send_personal_message({"status": "error", "detail": "User session is invalid or expired."}, user_id)
-        return SingleFileProcessResponse(
-            original_gcs_path=request.gcs_path,
-            status_message="User session is invalid or expired. Please re-initialize session.",
-            overall_error="AuthenticationError"
-        )
+    # if not is_user_session_valid(user_id):
+    #     logger.warning(f"User {user_id} - Invalid or expired session.")
+    #     await websocket_manager.send_personal_message({"status": "error", "detail": "User session is invalid or expired."}, user_id)
+    #     return SingleFileProcessResponse(
+    #         original_gcs_path=request.gcs_path,
+    #         status_message="User session is invalid or expired. Please re-initialize session.",
+    #         overall_error="AuthenticationError"
+    #     )
 
     bucket_name, blob_name = parse_gcs_path(request.gcs_path)
     if not bucket_name or not blob_name:
@@ -1189,7 +873,7 @@ async def process_gcs_file_endpoint(request: GcsProcessRequest):
             emotion=get_first_item(processing_results.get("emotion")),
             bio_annotation_gemini=get_first_dict(processing_results.get("bio_annotation_gemini")),
             gemini_intent=get_first_item(processing_results.get("gemini_intent")),
-            prompt_used=processing_results.get("prompt_used"),
+            # prompt_used=processing_results.get("prompt_used"),
             error_details=processing_results.get("error_details"),
             overall_error=processing_results.get("overall_error_summary")
         )
@@ -1232,10 +916,10 @@ async def process_gcs_directory_endpoint(request: GcsProcessRequest):
     logger.info(f"User {user_id} - Received request to process GCS directory: {request.gcs_path}. Output: {output_jsonl_path}")
     await websocket_manager.send_personal_message({"status": "request_received", "detail": f"Received directory request for {request.gcs_path}"}, user_id)
 
-    if not is_user_session_valid(user_id):
-        logger.warning(f"User {user_id} - Invalid or expired session.")
-        await websocket_manager.send_personal_message({"status": "error", "detail": "User session is invalid or expired."}, user_id)
-        return {"error": "User session is invalid or expired. Please re-initialize session."}
+    # if not is_user_session_valid(user_id):
+    #     logger.warning(f"User {user_id} - Invalid or expired session.")
+    #     await websocket_manager.send_personal_message({"status": "error", "detail": "User session is invalid or expired."}, user_id)
+    #     return {"error": "User session is invalid or expired. Please re-initialize session."}
 
     try:
         output_jsonl_path.parent.mkdir(parents=True, exist_ok=True)

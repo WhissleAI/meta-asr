@@ -2,9 +2,9 @@
 import json
 import asyncio
 from typing import Tuple, Optional, List
-from config import logger, ENTITY_TYPES, INTENT_TYPES # Relative import
-from models import GEMINI_AVAILABLE # Changed from GEMINI_CONFIGURED and relative import
-from session_store import get_user_api_key # Added for user-specific keys
+import os
+from config import logger, ENTITY_TYPES, INTENT_TYPES, GOOGLE_API_KEY
+from models import GEMINI_AVAILABLE
 import google.generativeai as genai
 import re
 
@@ -57,32 +57,176 @@ Sentences to Annotate Now:
 {json.dumps(texts_to_annotate, ensure_ascii=False, indent=2)}
 '''
 
-# async def annotate_text_structured_with_gemini(text_to_annotate: str, custom_prompt: Optional[str], user_id: str) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[str], Optional[str]]:
-#     if not GEMINI_AVAILABLE:
-#         return None, None, None, "Gemini (google.generativeai) library is not available."
+async def annotate_text_structured_with_gemini(text_to_annotate: str, custom_prompt: Optional[str], user_id: str = None) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[str], Optional[str]]:
+    if not GEMINI_AVAILABLE:
+        return None, None, None, "Gemini (google.generativeai) library is not available."
 
-#     gemini_api_key = get_user_api_key(user_id, "gemini")
-#     if not gemini_api_key:
-#         return None, None, None, "Gemini API key not found or session expired for user."
+    gemini_api_key = GOOGLE_API_KEY
+    if not gemini_api_key:
+        return None, None, None, "Gemini API key not found in environment."
 
-#     try:
-#         # Configure Gemini with the user-specific key for this request
-#         # Note: genai.configure is a global setting. This approach has limitations in highly concurrent scenarios
-#         # if the SDK doesn't support per-client/per-request API keys directly.
-#         genai.configure(api_key=gemini_api_key)
-#     except Exception as e:
-#         logger.error(f"Failed to configure Gemini with user API key for user {user_id}: {e}")
-#         return None, None, None, "Failed to configure Gemini API with user key."
+    try:
+        genai.configure(api_key=gemini_api_key)
+    except Exception as e:
+        logger.error(f"Failed to configure Gemini with env API key: {e}")
+        return None, None, None, "Failed to configure Gemini API with env key."
+
+    if not text_to_annotate or text_to_annotate.isspace():
+        return [], [], "NO_SPEECH_INPUT", None
+    prompt = get_annotation_prompt([text_to_annotate.lower()])
+    if custom_prompt:
+        prompt = f"{custom_prompt}\n Sentences to Annotate Now: {json.dumps([text_to_annotate.lower()], ensure_ascii=False, indent=2)}"
+    else:
+        prompt = get_annotation_prompt([text_to_annotate.lower()])
+    # logger.info(f"Using prompt for Gemini annotation in annotation func: {prompt[:100]}...")  # Log first 100 chars to avoid clutter
+    logger.info(f"Using prompt for Gemini annotation in annotation func: {prompt[:50]}")  # Log first 100 chars to avoid clutter
+    try:
+        model = genai.GenerativeModel("models/gemini-2.0-flash")
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+        response = await asyncio.to_thread(
+            model.generate_content,
+            prompt,
+            generation_config=genai.types.GenerationConfig(response_mime_type="application/json"),
+            safety_settings=safety_settings,
+            request_options={'timeout': 120}
+        )
+        if response.candidates:
+            raw_json_output = response.text.strip()
+            logger.debug(f"Gemini raw JSON output for BIO: {raw_json_output}")
+            logger.info(f"Gemini raw JSON output for BIO: {raw_json_output}")
+            try:
+                parsed_data_list = json.loads(raw_json_output)
+            except json.JSONDecodeError as json_e:
+                # Attempt to fix trailing braces/brackets
+                fixed_output = re.sub(r'}}\s*\]$', '}]', raw_json_output)
+                try:
+                    parsed_data_list = json.loads(fixed_output)
+                except Exception as e2:
+                    logger.error(f"Gemini BIO annotation JSON decoding failed after fix: {e2}. Response: {raw_json_output}")
+                    return None, None, None, f"Gemini BIO: JSONDecodeError - {json_e}"
+            except Exception as e:
+                logger.error(f"Error parsing Gemini BIO annotation response: {e}. Response: {raw_json_output}")
+                return None, None, None, f"Gemini BIO: Parsing error - {e}"
+            if not isinstance(parsed_data_list, list) or not parsed_data_list:
+                logger.error(f"Gemini BIO annotation did not return a list or returned an empty list: {raw_json_output}")
+                return None, None, None, "Gemini BIO: Invalid or empty list format"
+            annotation_object = parsed_data_list[0]
+            tokens = annotation_object.get("tokens")
+            tags = annotation_object.get("tags")
+            intent = annotation_object.get("intent")
+            if not (isinstance(tokens, list) and isinstance(tags, list) and isinstance(intent, str)):
+                logger.error(f"Gemini BIO: Invalid types for tokens, tags, or intent. Tokens: {type(tokens)}, Tags: {type(tags)}, Intent: {type(intent)}. Tokens: {tokens}, Tags: {tags}")
+                return None, None, None, "Gemini BIO: Type mismatch in parsed data"
+            # if len(tokens) != len(tags):
+            #     logger.error(f"Gemini BIO: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts. Tokens: {tokens}, Tags: {tags}")
+            #     return None, None, None, "Gemini BIO: Token/Tag count mismatch"
+            if len(tokens) != len(tags):
+                logger.warning(f"Gemini BIO: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts. Attempting to pad tags.")
+                # Pad tags if there are fewer tags than tokens
+                if len(tags) < len(tokens):
+                    tags += ["O"] * (len(tokens) - len(tags))
+                # Truncate tags if there are more tags than tokens (less common, but handled just in case)
+                elif len(tags) > len(tokens):
+                    tags = tags[:len(tokens)]
+                logger.info(f"After padding, Tokens: {tokens}, Tags: {tags}")
+
+            return tokens, tags, intent.upper(), None
+        else:
+            error_message = f"No candidates from Gemini BIO annotation for text: {text_to_annotate[:100]}..."
+            if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                feedback = getattr(response.prompt_feedback, 'block_reason_message', str(response.prompt_feedback))
+                error_message += f" Feedback: {feedback}"
+            logger.error(error_message)
+            return None, None, None, error_message
+    except Exception as e:
+        logger.error(f"Gemini API/SDK error during BIO annotation: {type(e).__name__}: {e}", exc_info=True)
+        return None, None, None, f"Gemini API/SDK error: {type(e).__name__}"
+
+
+
+
+
+
+
+
+
+
+
+# ************ tokenization and annotation ************
+
+# def tokenize_text(text: str) -> List[str]:
+#     """
+#     Tokenizes the input text into a list of tokens with regex-based preprocessing.
+#     - Normalizes newlines to a single space.
+#     - Splits text into words using whitespace.
+#     Returns a flat list of tokens.
+#     """
+#     if not text or text.isspace():
+#         return []
+    
+#     # Normalize newlines: replace multiple newlines with a single space
+#     text = re.sub(r'\n+', ' ', text).strip()
+    
+#     logger.debug(f"Tokenizing text: {text[:100]}...")  # Log first 100 chars to avoid clutter
+#     # Tokenize into words (lowercase for consistency)
+#     return text.lower().split()
+
+# async def annotate_text_structured_with_gemini(
+#     text_to_annotate: str,
+#     custom_prompt: Optional[str],
+#     user_id: str
+# ) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[str], Optional[str]]:
+#     """
+#     Annotates text using Gemini model after local tokenization.
+#     Args:
+#         text_to_annotate: The input text to annotate.
+#         custom_prompt: Optional custom prompt for annotation.
+#         user_id: User ID to retrieve their Gemini API key.
+#     Returns:
+#         Tuple containing:
+#         - List of tokens (or None if error).
+#         - List of BIO tags (or None if error).
+#         - Intent (or None if error).
+#         - Error message (or None if successful).
+#     """
+    # if not GEMINI_AVAILABLE:
+    #     return None, None, None, "Gemini (google.generativeai) library is not available."
+
+    # gemini_api_key = os.getenv("GOOGLE_API_KEY")
+    # if not gemini_api_key:
+    #     return None, None, None, "Gemini API key not found in environment variables."
+
+    # try:
+    #     # Configure Gemini with the env key
+    #     genai.configure(api_key=gemini_api_key)
+    # except Exception as e:
+    #     logger.error(f"Failed to configure Gemini with env API key: {e}")
+    #     return None, None, None, "Failed to configure Gemini API with env key."
 
 #     if not text_to_annotate or text_to_annotate.isspace():
 #         return [], [], "NO_SPEECH_INPUT", None
-#     # prompt = get_annotation_prompt([text_to_annotate.lower()])
+
+#     # Local tokenization
+#     tokens = tokenize_text(text_to_annotate)
+#     if not tokens:
+#         return [], [], "NO_SPEECH_INPUT", None
+
+#     # Construct prompt with pre-tokenized text
 #     if custom_prompt:
-#         prompt = f"{custom_prompt}\n Sentences to Annotate Now: {json.dumps([text_to_annotate.lower()], ensure_ascii=False, indent=2)}"
+#         prompt = f"{custom_prompt}\nTokens to Annotate: {json.dumps(tokens, ensure_ascii=False, indent=2)}"
 #     else:
-#         prompt = get_annotation_prompt([text_to_annotate.lower()])
-#     # logger.info(f"Using prompt for Gemini annotation in annotation func: {prompt[:100]}...")  # Log first 100 chars to avoid clutter
-#     logger.info(f"Using prompt for Gemini annotation in annotation func: {prompt}")  # Log first 100 chars to avoid clutter
+#         prompt = (
+#             "Annotate the following tokens with BIO tags (B-, I-, O) for named entities and identify the intent. "
+#             "Return a JSON object with 'tags' (list of BIO tags corresponding to the tokens) and 'intent' (string). "
+#             f"Tokens: {json.dumps(tokens, ensure_ascii=False, indent=2)}"
+#         )
+#     logger.info(f"Using prompt for Gemini annotation: {prompt}")
+
 #     try:
 #         model = genai.GenerativeModel("models/gemini-1.5-flash")
 #         safety_settings = [
@@ -100,178 +244,45 @@ Sentences to Annotate Now:
 #         )
 #         if response.candidates:
 #             raw_json_output = response.text.strip()
-#             logger.debug(f"Gemini raw JSON output for BIO: {raw_json_output}")
-#             logger.info(f"Gemini raw JSON output for BIO: {raw_json_output}")
+#             logger.info(f"Gemini raw JSON output: {raw_json_output}")
 #             try:
-#                 parsed_data_list = json.loads(raw_json_output)
-#                 if not isinstance(parsed_data_list, list) or not parsed_data_list:
-#                     logger.error(f"Gemini BIO annotation did not return a list or returned an empty list: {raw_json_output}")
-#                     return None, None, None, "Gemini BIO: Invalid or empty list format"
-#                 annotation_object = parsed_data_list[0]
-#                 tokens = annotation_object.get("tokens")
-#                 tags = annotation_object.get("tags")
-#                 intent = annotation_object.get("intent")
-#                 if not (isinstance(tokens, list) and isinstance(tags, list) and isinstance(intent, str)):
-#                     logger.error(f"Gemini BIO: Invalid types for tokens, tags, or intent. Tokens: {type(tokens)}, Tags: {type(tags)}, Intent: {type(intent)}. Tokens: {tokens}, Tags: {tags}")
-#                     return None, None, None, "Gemini BIO: Type mismatch in parsed data"
-#                 # if len(tokens) != len(tags):
-#                 #     logger.error(f"Gemini BIO: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts. Tokens: {tokens}, Tags: {tags}")
-#                 #     return None, None, None, "Gemini BIO: Token/Tag count mismatch"
+#                 parsed_data = json.loads(raw_json_output)
+#                 if not isinstance(parsed_data, dict):
+#                     logger.error(f"Gemini annotation did not return a dict: {raw_json_output}")
+#                     return tokens, None, None, "Gemini: Invalid response format, expected a dictionary"
+
+#                 tags = parsed_data.get("tags")
+#                 intent = parsed_data.get("intent")
+#                 if not (isinstance(tags, list) and isinstance(intent, str)):
+#                     logger.error(f"Gemini: Invalid types for tags or intent. Tags: {type(tags)}, Intent: {type(intent)}")
+#                     return tokens, None, None, "Gemini: Type mismatch in parsed data"
+
+#                 # Validate tags length
 #                 if len(tokens) != len(tags):
-#                     logger.warning(f"Gemini BIO: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts. Attempting to pad tags.")
-#                     # Pad tags if there are fewer tags than tokens
+#                     logger.warning(f"Gemini: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts. Attempting to pad tags.")
 #                     if len(tags) < len(tokens):
 #                         tags += ["O"] * (len(tokens) - len(tags))
-#                     # Truncate tags if there are more tags than tokens (less common, but handled just in case)
 #                     elif len(tags) > len(tokens):
 #                         tags = tags[:len(tokens)]
-#                     logger.info(f"After padding, Tokens: {tokens}, Tags: {tags}")
+#                     logger.info(f"After padding, Tags: {tags}")
 
 #                 return tokens, tags, intent.upper(), None
 #             except json.JSONDecodeError as json_e:
-#                 logger.error(f"Gemini BIO annotation JSON decoding failed: {json_e}. Response: {raw_json_output}")
-#                 return None, None, None, f"Gemini BIO: JSONDecodeError - {json_e}"
+#                 logger.error(f"Gemini JSON decoding failed: {json_e}. Response: {raw_json_output}")
+#                 return tokens, None, None, f"Gemini: JSONDecodeError - {json_e}"
 #             except Exception as e:
-#                 logger.error(f"Error parsing Gemini BIO annotation response: {e}. Response: {raw_json_output}")
-#                 return None, None, None, f"Gemini BIO: Parsing error - {e}"
+#                 logger.error(f"Error parsing Gemini response: {e}. Response: {raw_json_output}")
+#                 return tokens, None, None, f"Gemini: Parsing error - {e}"
 #         else:
-#             error_message = f"No candidates from Gemini BIO annotation for text: {text_to_annotate[:100]}..."
+#             error_message = f"No candidates from Gemini annotation for tokens: {tokens[:100]}..."
 #             if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
 #                 feedback = getattr(response.prompt_feedback, 'block_reason_message', str(response.prompt_feedback))
 #                 error_message += f" Feedback: {feedback}"
 #             logger.error(error_message)
-#             return None, None, None, error_message
+#             return tokens, None, None, error_message
 #     except Exception as e:
-#         logger.error(f"Gemini API/SDK error during BIO annotation: {type(e).__name__}: {e}", exc_info=True)
-#         return None, None, None, f"Gemini API/SDK error: {type(e).__name__}"
-
-
-# ************ tokenization and annotation ************
-
-def tokenize_text(text: str) -> List[str]:
-    """
-    Tokenizes the input text into a list of tokens with regex-based preprocessing.
-    - Normalizes newlines to a single space.
-    - Splits text into words using whitespace.
-    Returns a flat list of tokens.
-    """
-    if not text or text.isspace():
-        return []
-    
-    # Normalize newlines: replace multiple newlines with a single space
-    text = re.sub(r'\n+', ' ', text).strip()
-    
-    logger.debug(f"Tokenizing text: {text[:100]}...")  # Log first 100 chars to avoid clutter
-    # Tokenize into words (lowercase for consistency)
-    return text.lower().split()
-
-async def annotate_text_structured_with_gemini(
-    text_to_annotate: str,
-    custom_prompt: Optional[str],
-    user_id: str
-) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[str], Optional[str]]:
-    """
-    Annotates text using Gemini model after local tokenization.
-    Args:
-        text_to_annotate: The input text to annotate.
-        custom_prompt: Optional custom prompt for annotation.
-        user_id: User ID to retrieve their Gemini API key.
-    Returns:
-        Tuple containing:
-        - List of tokens (or None if error).
-        - List of BIO tags (or None if error).
-        - Intent (or None if error).
-        - Error message (or None if successful).
-    """
-    if not GEMINI_AVAILABLE:
-        return None, None, None, "Gemini (google.generativeai) library is not available."
-
-    gemini_api_key = get_user_api_key(user_id, "gemini")
-    if not gemini_api_key:
-        return None, None, None, "Gemini API key not found or session expired for user."
-
-    try:
-        # Configure Gemini with the user-specific key
-        genai.configure(api_key=gemini_api_key)
-    except Exception as e:
-        logger.error(f"Failed to configure Gemini with user API key for user {user_id}: {e}")
-        return None, None, None, "Failed to configure Gemini API with user key."
-
-    if not text_to_annotate or text_to_annotate.isspace():
-        return [], [], "NO_SPEECH_INPUT", None
-
-    # Local tokenization
-    tokens = tokenize_text(text_to_annotate)
-    if not tokens:
-        return [], [], "NO_SPEECH_INPUT", None
-
-    # Construct prompt with pre-tokenized text
-    if custom_prompt:
-        prompt = f"{custom_prompt}\nTokens to Annotate: {json.dumps(tokens, ensure_ascii=False, indent=2)}"
-    else:
-        prompt = (
-            "Annotate the following tokens with BIO tags (B-, I-, O) for named entities and identify the intent. "
-            "Return a JSON object with 'tags' (list of BIO tags corresponding to the tokens) and 'intent' (string). "
-            f"Tokens: {json.dumps(tokens, ensure_ascii=False, indent=2)}"
-        )
-    logger.info(f"Using prompt for Gemini annotation: {prompt}")
-
-    try:
-        model = genai.GenerativeModel("models/gemini-1.5-flash")
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-        response = await asyncio.to_thread(
-            model.generate_content,
-            prompt,
-            generation_config=genai.types.GenerationConfig(response_mime_type="application/json"),
-            safety_settings=safety_settings,
-            request_options={'timeout': 120}
-        )
-        if response.candidates:
-            raw_json_output = response.text.strip()
-            logger.info(f"Gemini raw JSON output: {raw_json_output}")
-            try:
-                parsed_data = json.loads(raw_json_output)
-                if not isinstance(parsed_data, dict):
-                    logger.error(f"Gemini annotation did not return a dict: {raw_json_output}")
-                    return tokens, None, None, "Gemini: Invalid response format, expected a dictionary"
-
-                tags = parsed_data.get("tags")
-                intent = parsed_data.get("intent")
-                if not (isinstance(tags, list) and isinstance(intent, str)):
-                    logger.error(f"Gemini: Invalid types for tags or intent. Tags: {type(tags)}, Intent: {type(intent)}")
-                    return tokens, None, None, "Gemini: Type mismatch in parsed data"
-
-                # Validate tags length
-                if len(tokens) != len(tags):
-                    logger.warning(f"Gemini: Mismatch between token ({len(tokens)}) and tag ({len(tags)}) counts. Attempting to pad tags.")
-                    if len(tags) < len(tokens):
-                        tags += ["O"] * (len(tokens) - len(tags))
-                    elif len(tags) > len(tokens):
-                        tags = tags[:len(tokens)]
-                    logger.info(f"After padding, Tags: {tags}")
-
-                return tokens, tags, intent.upper(), None
-            except json.JSONDecodeError as json_e:
-                logger.error(f"Gemini JSON decoding failed: {json_e}. Response: {raw_json_output}")
-                return tokens, None, None, f"Gemini: JSONDecodeError - {json_e}"
-            except Exception as e:
-                logger.error(f"Error parsing Gemini response: {e}. Response: {raw_json_output}")
-                return tokens, None, None, f"Gemini: Parsing error - {e}"
-        else:
-            error_message = f"No candidates from Gemini annotation for tokens: {tokens[:100]}..."
-            if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
-                feedback = getattr(response.prompt_feedback, 'block_reason_message', str(response.prompt_feedback))
-                error_message += f" Feedback: {feedback}"
-            logger.error(error_message)
-            return tokens, None, None, error_message
-    except Exception as e:
-        logger.error(f"Gemini API/SDK error during annotation: {type(e).__name__}: {e}", exc_info=True)
-        return tokens, None, None, f"Gemini API/SDK error: {type(e).__name__}"
+#         logger.error(f"Gemini API/SDK error during annotation: {type(e).__name__}: {e}", exc_info=True)
+#         return tokens, None, None, f"Gemini API/SDK error: {type(e).__name__}"
 
 
 

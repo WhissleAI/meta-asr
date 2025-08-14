@@ -5,7 +5,8 @@ from transformers import (
     Wav2Vec2Processor, Wav2Vec2PreTrainedModel, Wav2Vec2Model
 )
 import torch.nn as nn
-from config import logger, device
+from config import logger, GOOGLE_API_KEY, DEEPGRAM_API_KEY, WHISSLE_AUTH_TOKEN, device
+
 
 # Globals for model availability
 GEMINI_AVAILABLE = False # Renamed from GEMINI_CONFIGURED, indicates library availability
@@ -52,11 +53,47 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         return hidden_states, logits_age, logits_gender
 
 # Load models and configure APIs
+
+try:
+    logger.info("Loading Age/Gender model...")
+    age_gender_model_name = "audeering/wav2vec2-large-robust-6-ft-age-gender"
+    age_gender_processor = Wav2Vec2Processor.from_pretrained(age_gender_model_name)
+    age_gender_model = AgeGenderModel.from_pretrained(age_gender_model_name).to(device)
+    age_gender_model.eval()
+    logger.info("Age/Gender model loaded successfully.")
+except Exception as e:
+    logger.error(f"Failed to load Age/Gender model: {e}", exc_info=True)
+
+try:
+    logger.info("Loading Emotion model...")
+    emotion_model_name = "superb/hubert-large-superb-er"
+    emotion_feature_extractor = AutoFeatureExtractor.from_pretrained(emotion_model_name)
+    emotion_model = AutoModelForAudioClassification.from_pretrained(emotion_model_name).to(device)
+    emotion_model.eval()
+    logger.info("Emotion model loaded successfully.")
+except Exception as e:
+    logger.error(f"Failed to load Emotion model: {e}", exc_info=True)
+
+
 try:
     logger.info("Attempting to import google.generativeai for Gemini...")
     import google.generativeai as genai
     GEMINI_AVAILABLE = True
     logger.info("Gemini (google.generativeai) library is available.")
+
+    # Configure Gemini API if GOOGLE_API_KEY is present
+    GEMINI_CONFIGURED = False
+    if GOOGLE_API_KEY:
+        try:
+            genai.configure(api_key=GOOGLE_API_KEY)
+            logger.info("Gemini API configured successfully.")
+            GEMINI_CONFIGURED = True
+            GEMINI_AVAILABLE = True
+        except Exception as e:
+            logger.error(f"Error configuring Gemini API: {e}. Gemini features will be unavailable.")
+            GEMINI_AVAILABLE = False
+    else:
+        logger.warning("GOOGLE_API_KEY not set. Gemini API will not be configured.")
 except ImportError:
     logger.warning("google.generativeai library not found. Gemini features will be unavailable.")
     GEMINI_AVAILABLE = False

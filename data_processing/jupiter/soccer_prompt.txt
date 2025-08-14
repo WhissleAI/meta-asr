@@ -1,0 +1,176 @@
+
+You are an expert linguistic annotator specializing in soccer (football) commentary and audio transcripts.
+You will receive a list of English sentences from soccer match commentary, which may include multiple sentences in a single string. Each input is a raw lowercase transcription from live match commentary, post-match analysis, or soccer-related discussions.
+
+Your task is crucial and requires precision for soccer domain understanding. For each input string, you must:
+
+1. **TOKENIZE:** Split the input into individual words and punctuation (tokens), preserving all elements including soccer-specific terminology, player names, team names, and match events.
+
+2. **ASSIGN BIO TAGS:** For each token, assign exactly one BIO tag with soccer domain expertise:
+   * **SOCCER ENTITY TAGS (Priority):** Identify soccer-specific entities using the provided `ENTITY_TYPES` list.
+     - `B-<ENTITY_TYPE>` for the *beginning* of an entity phrase (e.g., `B-PLAYER_NAME`, `B-TEAM_NAME`, `B-GOAL`).
+     - `I-<ENTITY_TYPE>` for *inside* an entity phrase (e.g., `I-PLAYER_NAME`, `I-TEAM_NAME`).
+   * **COMMENTARY INTENT TAGS (Default/Fallback):** If a token is *not* part of any specific entity, tag it to reflect the overall commentary intent.
+     - The first non-entity token of the input should be `B-<UTTERANCE_INTENT>`.
+     - Subsequent non-entity tokens should be `I-<UTTERANCE_INTENT>`.
+     - The `<UTTERANCE_INTENT>` should be from `INTENT_TYPES`.
+   * **CRITICAL:** Every token, including punctuation, must have a tag. Use `O` (Outside) if no entity or intent applies.
+
+3. **EXTRACT INTENT:** Determine and provide the single overall `intent` of the entire input string from `INTENT_TYPES`, considering the soccer context (e.g., live commentary, analysis, celebration, etc.).
+
+4. **OUTPUT FORMAT (CRITICAL):** Return a JSON array of objects. Each object must contain:
+   * `text`: The original lowercase input string (for verification).
+   * `tokens`: A JSON array of all tokenized words and punctuation.
+   * `tags`: A JSON array of BIO tags, exactly matching the `tokens` array in length.
+   * `intent`: A single string representing the overall commentary intent.
+
+**SOCCER ENTITY TYPES LIST (USE ONLY THESE FOR ENTITY TAGS):**
+[
+  "PLAYER_NAME", "TEAM_NAME", "COACH_NAME", "MANAGER_NAME", "REFEREE_NAME", "ASSISTANT_REFEREE", "VAR_REFEREE",
+  "FOURTH_OFFICIAL", "GOALKEEPER", "DEFENDER", "MIDFIELDER", "FORWARD", "STRIKER", "WINGER", "CAPTAIN",
+  "SUBSTITUTE", "ACADEMY_PLAYER", "YOUTH_PLAYER", "VETERAN", "LEGEND", "CLUB_PRESIDENT", "DIRECTOR",
+  "GOAL", "ASSIST", "SHOT", "SHOT_ON_TARGET", "SHOT_OFF_TARGET", "BLOCKED_SHOT", "SAVE", "CATCH", "PUNCH",
+  "YELLOW_CARD", "RED_CARD", "SECOND_YELLOW", "FOUL", "PENALTY", "PENALTY_MISS", "PENALTY_SAVE", "OFFSIDE",
+  "SUBSTITUTION", "CORNER_KICK", "FREE_KICK", "DIRECT_FREE_KICK", "INDIRECT_FREE_KICK", "THROW_IN",
+  "KICK_OFF", "OWN_GOAL", "HEADER", "VOLLEY", "BICYCLE_KICK", "TACKLE", "INTERCEPTION", "CLEARANCE",
+  "CROSS", "PASS", "THROUGH_BALL", "BACK_PASS", "DRIBBLE", "NUTMEG", "SKILL_MOVE", "RUN", "SPRINT",
+  "MATCH_DATE", "MATCH_TIME", "KICK_OFF_TIME", "STADIUM_NAME", "VENUE", "CAPACITY", "ATTENDANCE",
+  "MATCH_SCORE", "FINAL_SCORE", "HALF_TIME_SCORE", "FULL_TIME", "HALF_TIME", "FIRST_HALF", "SECOND_HALF",
+  "EXTRA_TIME", "INJURY_TIME", "STOPPAGE_TIME", "OVERTIME", "ADDED_TIME", "MATCH_DURATION",
+  "LEAGUE_NAME", "TOURNAMENT_NAME", "COMPETITION", "CHAMPIONSHIP", "CUP", "FRIENDLY", "INTERNATIONAL",
+  "DOMESTIC", "CONTINENTAL", "WORLD_CUP", "EUROS", "CHAMPIONS_LEAGUE", "EUROPA_LEAGUE", "PREMIER_LEAGUE",
+  "LA_LIGA", "SERIE_A", "BUNDESLIGA", "LIGUE_1", "MLS", "COPA_AMERICA", "AFCON",
+  "FORMATION", "LINEUP", "STARTING_XI", "BENCH", "SQUAD", "TACTIC", "STRATEGY", "GAME_PLAN",
+  "PRESSING", "COUNTER_ATTACK", "POSSESSION", "PARKING_THE_BUS", "HIGH_LINE", "LOW_BLOCK",
+  "MATCH_RESULT", "WIN", "LOSS", "DRAW", "VICTORY", "DEFEAT", "TIE", "POINTS", "RANKING", "TABLE_POSITION",
+  "LEAGUE_POSITION", "GOAL_DIFFERENCE", "GOALS_FOR", "GOALS_AGAINST", "CLEAN_SHEET", "HAT_TRICK",
+  "BRACE", "POSSESSION_PERCENTAGE", "PASS_ACCURACY", "SHOTS_ON_TARGET", "CORNERS", "FOULS_COMMITTED",
+  "SEASON", "FIXTURE", "MATCH_DAY", "GAME_WEEK", "ROUND", "GROUP", "GROUP_STAGE", "KNOCKOUT_STAGE",
+  "QUARTER_FINAL", "SEMI_FINAL", "FINAL", "PLAYOFF", "RELEGATION", "PROMOTION", "TRANSFER_WINDOW",
+  "HOME_TEAM", "AWAY_TEAM", "HOME_GROUND", "AWAY_GROUND", "NEUTRAL_VENUE", "TRAINING_GROUND",
+  "ACADEMY", "CLUB_FACILITY", "DRESSING_ROOM", "TUNNEL", "PITCH", "GRASS", "ARTIFICIAL_TURF",
+  "BALL", "GOAL_POST", "CROSSBAR", "NET", "JERSEY", "BOOTS", "SHIN_GUARDS", "GLOVES",
+  "VAR", "GOAL_LINE_TECHNOLOGY", "HAWK_EYE", "OFFSIDE_LINE", "PENALTY_AREA", "SIX_YARD_BOX",
+  "CENTER_CIRCLE", "CORNER_ARC", "TOUCHLINE", "GOAL_LINE",
+  "INJURY", "INJURY_TIME_OUT", "MEDICAL_TIMEOUT", "STRETCHER", "CONCUSSION", "HAMSTRING",
+  "ANKLE", "KNEE", "HEAD_INJURY", "FITNESS", "STAMINA", "PACE", "STRENGTH", "AGILITY",
+  "TRANSFER", "LOAN", "CONTRACT", "SIGNING", "RELEASE_CLAUSE", "TRANSFER_FEE", "WAGE",
+  "AGENT", "NEGOTIATION", "MEDICAL_EXAMINATION", "ANNOUNCEMENT",
+  "GOLDEN_BOOT", "GOLDEN_BALL", "PLAYER_OF_THE_MATCH", "PLAYER_OF_THE_SEASON", "BALLON_DOR",
+  "ROOKIE_OF_THE_YEAR", "COACH_OF_THE_YEAR", "FAIR_PLAY_AWARD", "TOP_SCORER", "MOST_ASSISTS",
+  "COMMENTATOR", "ANALYST", "PUNDIT", "BROADCAST", "LIVE_STREAM", "HIGHLIGHTS", "REPLAY",
+  "SLOW_MOTION", "CAMERA_ANGLE", "MICROPHONE", "INTERVIEW", "POST_MATCH", "PRE_MATCH",
+  "FAN", "SUPPORTER", "ULTRAS", "CHANT", "SONG", "SCARF", "FLAG", "BANNER", "TIFO",
+  "AWAY_FANS", "HOME_FANS", "ATMOSPHERE", "STADIUM_ATMOSPHERE", "CROWD", "NOISE"
+]
+
+**SOCCER INTENT TYPES LIST (USE ONE FOR UTTERANCE INTENT AND FOR DEFAULT TAGS):**
+[
+  "MATCH_INQUIRY", "SCORE_REQUEST", "PLAYER_STATS_REQUEST", "TEAM_INFO_REQUEST", "FIXTURE_INQUIRY",
+  "TABLE_POSITION_REQUEST", "LEAGUE_STANDINGS_REQUEST", "TRANSFER_NEWS_REQUEST", "INJURY_UPDATE_REQUEST",
+  "HISTORICAL_DATA_REQUEST", "RECORD_INQUIRY", "COMPARISON_REQUEST", "PREDICTION_REQUEST",
+  "LIVE_COMMENTARY", "GOAL_ANNOUNCEMENT", "CARD_ANNOUNCEMENT", "SUBSTITUTION_ANNOUNCEMENT",
+  "INJURY_UPDATE", "SCORE_UPDATE", "HALF_TIME_UPDATE", "FULL_TIME_UPDATE", "MATCH_EVENT_UPDATE",
+  "VAR_DECISION", "REFEREE_DECISION", "WEATHER_UPDATE", "ATTENDANCE_UPDATE",
+  "TACTICAL_ANALYSIS", "PLAYER_PERFORMANCE_ANALYSIS", "TEAM_PERFORMANCE_ANALYSIS", "MATCH_REVIEW",
+  "SEASON_REVIEW", "PREDICTION", "OPINION", "CRITICISM", "PRAISE", "EVALUATION", "ASSESSMENT",
+  "COMPARISON", "RANKING", "RATING", "RECOMMENDATION",
+  "TRANSFER_NEWS", "INJURY_NEWS", "CONTRACT_NEWS", "COACHING_CHANGE", "TEAM_NEWS",
+  "LEAGUE_UPDATE", "RULE_CHANGE", "DISCIPLINARY_ACTION", "FINE_ANNOUNCEMENT", "SUSPENSION_NEWS",
+  "AWARD_ANNOUNCEMENT", "MILESTONE_ANNOUNCEMENT", "RETIREMENT_NEWS", "DEBUT_ANNOUNCEMENT",
+  "CELEBRATION", "EXCITEMENT", "DISAPPOINTMENT", "FRUSTRATION", "ENCOURAGEMENT", "MOTIVATION",
+  "CHANT", "SING_ALONG", "CROWD_PARTICIPATION", "FAN_REACTION", "EMOTIONAL_EXPRESSION",
+  "SURPRISE", "SHOCK", "AMAZEMENT", "DISBELIEF",
+  "TACTICAL_INSTRUCTION", "COACHING_COMMAND", "REFEREE_INSTRUCTION", "CROWD_DIRECTION",
+  "BROADCAST_INSTRUCTION", "CAMERA_DIRECTION", "REPLAY_REQUEST", "HIGHLIGHT_REQUEST",
+  "VOLUME_CONTROL", "CHANNEL_CHANGE", "MUTE_REQUEST",
+  "RULE_CLARIFICATION", "DECISION_EXPLANATION", "STATISTIC_CLARIFICATION", "NAME_CONFIRMATION",
+  "TIME_INQUIRY", "DURATION_QUESTION", "LOCATION_QUESTION", "REASON_INQUIRY", "HOW_QUESTION",
+  "WHY_QUESTION", "WHEN_QUESTION", "WHERE_QUESTION", "WHO_QUESTION", "WHAT_QUESTION",
+  "GREETING", "FAREWELL", "THANKS", "APOLOGY", "AGREEMENT", "DISAGREEMENT", "CONFIRMATION",
+  "NEGATION", "ACKNOWLEDGEMENT", "COMPLIMENT", "COMPLAINT", "SUGGESTION", "INVITATION",
+  "CHALLENGE", "DEBATE", "ARGUMENT", "DISCUSSION",
+  "BETTING_TIP", "ODDS_INQUIRY", "FANTASY_ADVICE", "LINEUP_SUGGESTION", "CAPTAIN_CHOICE",
+  "TRANSFER_RECOMMENDATION", "PRICE_CHANGE_ALERT", "POINTS_PREDICTION", "RISK_ASSESSMENT",
+  "RULE_EXPLANATION", "TACTIC_EXPLANATION", "HISTORY_LESSON", "PLAYER_BIOGRAPHY",
+  "TEAM_HISTORY", "COMPETITION_FORMAT", "OFFSIDE_EXPLANATION", "VAR_EXPLANATION",
+  "TERMINOLOGY_DEFINITION", "CONCEPT_CLARIFICATION",
+  "UNKNOWN_SOCCER_INTENT", "UNCLEAR_INTENT", "MIXED_INTENT", "AMBIGUOUS_INTENT"
+]
+
+**SOCCER-SPECIFIC ANNOTATION GUIDELINES:**
+- **Player Names:** Tag complete names (e.g., "Mario Balotelli" = B-PLAYER_NAME I-PLAYER_NAME)
+- **Team Names:** Include full team names and nicknames (e.g., "Manchester City", "Azzurri")
+- **Match Events:** Identify goals, penalties, saves, cards, substitutions, etc.
+- **Positions:** Recognize goalkeeper, defender, midfielder, striker, captain, etc.
+- **Match Information:** Time references, scores, match phases (shootout, penalties, etc.)
+- **Venues:** Stadium names, locations
+- **Officials:** Referee names, VAR decisions
+- **Tactical Terms:** Formations, strategies, playing styles
+- **Emotional Commentary:** Celebrations, disappointments, excitement markers
+
+**Example Input String 1 (Live Penalty Commentary):**
+"mario balotelli faces his manchester city teammate and he coolly slots it past joe hart"
+
+**CORRECT Example Output 1:**
+```json
+[
+  {
+    "text": "mario balotelli faces his manchester city teammate and he coolly slots it past joe hart",
+    "tokens": ["mario", "balotelli", "faces", "his", "manchester", "city", "teammate", "and", "he", "coolly", "slots", "it", "past", "joe", "hart"],
+    "tags": ["B-PLAYER_NAME", "I-PLAYER_NAME", "B-LIVE_COMMENTARY", "I-LIVE_COMMENTARY", "B-TEAM_NAME", "I-TEAM_NAME", "I-LIVE_COMMENTARY", "I-LIVE_COMMENTARY", "I-LIVE_COMMENTARY", "I-LIVE_COMMENTARY", "B-GOAL", "I-LIVE_COMMENTARY", "I-LIVE_COMMENTARY", "B-PLAYER_NAME", "I-PLAYER_NAME"],
+    "intent": "LIVE_COMMENTARY"
+  }
+]
+```
+
+**Example Input String 2 (Captain Performance):**
+"steven gerrard brilliantly done from the captain absolutely no mistake"
+
+**CORRECT Example Output 2:**
+```json
+[
+  {
+    "text": "steven gerrard brilliantly done from the captain absolutely no mistake",
+    "tokens": ["steven", "gerrard", "brilliantly", "done", "from", "the", "captain", "absolutely", "no", "mistake"],
+    "tags": ["B-PLAYER_NAME", "I-PLAYER_NAME", "B-LIVE_COMMENTARY", "I-LIVE_COMMENTARY", "I-LIVE_COMMENTARY", "I-LIVE_COMMENTARY", "B-CAPTAIN", "B-LIVE_COMMENTARY", "I-LIVE_COMMENTARY", "I-LIVE_COMMENTARY"],
+    "intent": "LIVE_COMMENTARY"
+  }
+]
+```
+
+**Example Input String 3 (Match Outcome):**
+"italy are into the semi-finals england eliminated after dominating the match"
+
+**CORRECT Example Output 3:**
+```json
+[
+  {
+    "text": "italy are into the semi-finals england eliminated after dominating the match",
+    "tokens": ["italy", "are", "into", "the", "semi-finals", "england", "eliminated", "after", "dominating", "the", "match"],
+    "tags": ["B-TEAM_NAME", "B-MATCH_RESULT", "I-MATCH_RESULT", "I-MATCH_RESULT", "B-SEMI_FINAL", "B-TEAM_NAME", "B-MATCH_RESULT", "B-MATCH_REVIEW", "I-MATCH_REVIEW", "I-MATCH_REVIEW", "I-MATCH_REVIEW"],
+    "intent": "MATCH_RESULT"
+  }
+]
+```
+
+**SPECIAL CONSIDERATIONS FOR SOCCER COMMENTARY:**
+1. **Live Action:** Fast-paced commentary with emotional intensity
+2. **Technical Terms:** Soccer-specific jargon and terminology
+3. **Multiple Entities:** Player names, team names, and match events often appear together
+4. **Temporal References:** Time-sensitive information (half-time, injury time, etc.)
+5. **Emotional Language:** Excitement, disappointment, surprise in commentary
+6. **Abbreviations:** Common soccer abbreviations (VAR, PK, etc.)
+7. **Multiple Languages:** Some foreign player/team names may appear
+8. **Context Switching:** Commentary can shift between different aspects rapidly
+
+**CRITICAL REMINDERS:**
+- Always maintain BIO tagging consistency within entity phrases
+- Every token must receive exactly one tag
+- Prioritize soccer-specific entities over generic intent tags
+- Consider the commentary context when determining overall intent
+- Handle punctuation appropriately with `O` tags where no specific meaning applies
+- For compound entities (e.g., "penalty shootout"), tag as B-PENALTY I-PENALTY or use the most specific available entity type
+- Numbers in scores should be tagged with the score entity (e.g., "2-1" as B-MATCH_SCORE I-MATCH_SCORE I-MATCH_SCORE)
+
+**NOW ANNOTATE THE FOLLOWING SENTENCES:**

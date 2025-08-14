@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field as PydanticField, validator
 from typing import Optional, List
 
 # Load environment variables
-load_dotenv('D:/z-whissle/meta-asr/.env') # Keep this for other env vars like NEXT_PUBLIC_API_URL
+# load_dotenv('D:/z-whissle/meta-asr/.env') # Keep this for other env vars like NEXT_PUBLIC_API_URL
+load_dotenv("/home/dchauhan/workspace/meta-asr/.env")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(module)s - %(funcName)s - %(message)s')
@@ -80,7 +81,7 @@ class ModelChoice(str, Enum):
     whissle = "whissle"
     deepgram = "deepgram"
 
-USER_API_KEY_TTL_SECONDS = 30 * 60  # 30 minutes
+USER_API_KEY_TTL_SECONDS = 60 * 60   # 60 minutes
 
 class UserApiKey(BaseModel):
     provider: str

@@ -403,6 +403,16 @@ def process_parquet_dataset(
     buffer: List[Dict[str, Any]] = []
     processed = 0
 
+    # Derive a probable audio root under dataset if not explicitly provided
+    inferred_audio_root = audio_subdir or os.path.join(dataset_dir, 'data', 'audio')
+    if not os.path.isdir(inferred_audio_root):
+        # Some dumps store wavs directly under dataset_dir or dataset_dir/data
+        alt1 = os.path.join(dataset_dir, 'data')
+        if os.path.isdir(alt1):
+            inferred_audio_root = alt1
+        else:
+            inferred_audio_root = dataset_dir
+
     for shard_idx, parquet_path in enumerate(parquet_paths):
         print(f"Reading shard {shard_idx+1}/{len(parquet_paths)}: {os.path.basename(parquet_path)}")
         table = pq.read_table(parquet_path)
@@ -423,10 +433,28 @@ def process_parquet_dataset(
             if isinstance(qa_audio_struct, dict):
                 # huggingface datasets typical struct {"path": ..., "bytes": ...}
                 audio_path = qa_audio_struct.get('path')
-                if audio_subdir and audio_path and not os.path.isabs(audio_path):
-                    candidate = os.path.join(audio_subdir, audio_path)
-                    if os.path.exists(candidate):
-                        audio_path = candidate
+                # Normalize and attempt resolution strategy:
+                # 1) If relative and provided audio_subdir exists, join.
+                # 2) Else try inferred_audio_root.
+                # 3) Else if only a bare filename, join dataset_dir.
+                if audio_path and not os.path.isabs(audio_path):
+                    candidate_paths = []
+                    if audio_subdir:
+                        candidate_paths.append(os.path.join(audio_subdir, audio_path))
+                    candidate_paths.append(os.path.join(inferred_audio_root, audio_path))
+                    candidate_paths.append(os.path.join(dataset_dir, audio_path))
+                    # Deduplicate while preserving order
+                    seen = set(); ordered = []
+                    for cp in candidate_paths:
+                        if cp not in seen:
+                            ordered.append(cp); seen.add(cp)
+                    resolved = None
+                    for cp in ordered:
+                        if os.path.exists(cp):
+                            resolved = cp
+                            break
+                    if resolved:
+                        audio_path = resolved
                 # If the referenced path doesn't exist but we have bytes, decode directly
                 audio_bytes = qa_audio_struct.get('bytes') if isinstance(qa_audio_struct, dict) else None
                 if audio_path and os.path.exists(audio_path):
@@ -463,6 +491,17 @@ def process_parquet_dataset(
                             sr = sr_read
                         signal = data.astype(np.float32)
                         duration = round(len(signal) / sr, 2)
+                        # Optionally persist decoded bytes for reproducibility if we have a reference name
+                        if audio_path and not os.path.isabs(audio_path):
+                            # Save under inferred_audio_root
+                            os.makedirs(inferred_audio_root, exist_ok=True)
+                            target_file = os.path.join(inferred_audio_root, os.path.basename(audio_path))
+                            try:
+                                import soundfile as sf
+                                sf.write(target_file, signal, sr)
+                                audio_path = target_file
+                            except Exception as e_save:
+                                logger.warning(f"Failed to save decoded audio bytes to {target_file}: {e_save}")
                     except Exception as e_bytes:
                         logger.error(f"Failed to decode inline audio bytes: {e_bytes}")
                         signal = None
@@ -533,7 +572,7 @@ def process_parquet_dataset(
 VOICE_ASSISTANT_DIR = "/external3/databases/hf-omini-data/VoiceAssistant-400K"
 OUTPUT_JSONL = "/external3/databases/hf-omini-data/voiceassistant_annotated_2.jsonl"
 PROCESSING_BATCH_SIZE = 25
-MAX_ROWS_DEBUG = 200  # Set to None for full dataset
+MAX_ROWS_DEBUG = None  # Set to None for full dataset
 
 if __name__ == "__main__":
     print("Starting VoiceAssistant QA Annotation Workflow...")

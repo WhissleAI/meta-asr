@@ -69,10 +69,12 @@ Note: API keys can also be set as environment variables or in a .env file.
 
     parser.add_argument('query', type=str, help='The search query for YouTube videos.')
     parser.add_argument('--language', type=str, default='en', help='Language for the transcript (e.g., "en", "es").')
-    parser.add_argument('--max-results', type=int, default=200, help='Maximum number of videos to search for.')
+    parser.add_argument('--max-results', type=int, default=300, help='Maximum number of videos to search for.')
     parser.add_argument('--download', type=str, choices=['transcript', 'video', 'both'], default='transcript',
                         help='Specify what to download: transcript, video, or both.')
     parser.add_argument('--output-dir', type=str, default='./downloads', help='Directory to save downloaded files.')
+    parser.add_argument('--gcs-bucket', type=str, help='Google Cloud Storage bucket name to upload files to. If provided, uploads are enabled.')
+    parser.add_argument('--region', type=str, help='Region code to prioritize search results (e.g., IN, US).')
     parser.add_argument('--google-api-key', type=str, help='Google Gemini API Key.')
     parser.add_argument('--youtube-api-key', type=str, help='YouTube Data API v3 Key.')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging for debugging.')
@@ -93,6 +95,10 @@ Note: API keys can also be set as environment variables or in a .env file.
     print(f"   Max Results: {args.max_results}")
     print(f"   Download Target: '{args.download}'")
     print(f"   Output Directory: '{args.output_dir}'")
+    if args.gcs_bucket:
+        print(f"   GCS Upload Bucket: '{args.gcs_bucket}'")
+    if args.region:
+        print(f"   Search Region: '{args.region}'")
     print("-" * 40)
 
     try:
@@ -101,7 +107,9 @@ Note: API keys can also be set as environment variables or in a .env file.
             language=args.language,
             max_results=args.max_results,
             download_target=args.download,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
+            gcs_bucket=args.gcs_bucket,
+            region_code=args.region
         ))
         print("\n" + "-" * 40)
         print("✅ Agent run completed successfully.")

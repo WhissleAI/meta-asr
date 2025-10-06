@@ -23,7 +23,7 @@ except ImportError:
     exit(1)
 
 # --- Import Agent Tools ---
-from youtube_tools import search_youtube_videos, download_media_in_parallel
+from youtube_tools import search_youtube_videos, download_media_in_parallel, upload_files_to_gcs_in_parallel
 
 # --- Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -31,7 +31,7 @@ logging.getLogger('google.api_core').setLevel(logging.ERROR) # Quieten noisy log
 
 # Use a model that supports tool calling. More models are listed here:
 # https://ai.google.dev/gemini-api/docs/models/gemini
-AGENT_MODEL = "gemini-flash-lite-latest"
+AGENT_MODEL = "gemini-2.5-pro"
 
 # --- Agent Definition ---
 
@@ -40,30 +40,23 @@ youtube_agent = Agent(
     model=AGENT_MODEL,
     description="Finds YouTube videos and downloads their transcripts or video files in parallel.",
     instruction="""
-    You are an intelligent assistant for downloading YouTube data efficiently.
+    You are an intelligent assistant for downloading YouTube data and uploading it to Google Cloud Storage.
 
     Workflow:
-    1.  **Search**: When a user provides a topic, use the `search_youtube_videos` tool
-        to find relevant videos. Let the user know the search is in progress.
-
-    2.  **Confirm**: After the search, present a clear, numbered list of the videos you found.
-        Do not download anything yet.
-
-    3.  **Download in Parallel**: When the user asks to download, you MUST use the
-        `download_media_in_parallel` tool. You must pass the **entire JSON list**
-        of videos from the search result into the `videos_json` argument of this tool.
-        This is critical for efficiency. Do not call download tools for each video individually.
-
-    4.  **Summarize**: After the parallel download tool finishes, present the summary of
-        successful and failed downloads to the user.
+    1.  **Search**: When a user provides a topic, use `search_youtube_videos` to find relevant videos. If the user specifies a country or region, pass the corresponding two-letter ISO 3166-1 alpha-2 country code to the `region_code` argument.
+    2.  **Confirm**: Present the search results to the user and ask what they want to download.
+    3.  **Download**: Use the `download_media_in_parallel` tool, passing the entire JSON list of videos.
+    4.  **Extract File Paths & Upload**: After downloads are complete, you must parse the JSON output from the download tool to create a new JSON list containing only the local file paths of the successfully downloaded files. Then, if the user requested an upload, you must call the `upload_files_to_gcs_in_parallel` tool, passing this new list of file paths to it.
+    5.  **Summarize**: Provide a final summary of both the download and upload operations.
 
     **Important Rules**:
-    - Always use `search_youtube_videos` first to get a list of videos.
-    - After searching, always wait for the user's command to start the download.
-    - **Crucially, for downloading, only use the `download_media_in_parallel` tool and provide it the full JSON string of videos.**
-    - Parse the JSON from tool outputs to inform your responses.
+    - Always `search_youtube_videos` first.
+    - If a region is mentioned, you must use the `region_code` argument in your search tool call.
+    - Always use `download_media_in_parallel` for downloading.
+    - **Crucially, after downloading, you must extract the `path` from each successful result and create a new JSON list to pass to `upload_files_to_gcs_in_parallel`.**
+    - Do not try to upload files that failed to download.
     """,
-    tools=[search_youtube_videos, download_media_in_parallel],
+    tools=[search_youtube_videos, download_media_in_parallel, upload_files_to_gcs_in_parallel],
 )
 
 # --- Runner & Session Setup ---
@@ -100,7 +93,7 @@ async def call_agent_async(query: str, user_id: str, session_id: str):
     print(f"\n<<< Agent: {final_response_text}")
     return final_response_text
 
-async def run_youtube_downloader_agent(query: str, language: str, max_results: int, download_target: str, output_dir: str):
+async def run_youtube_downloader_agent(query: str, language: str, max_results: int, download_target: str, output_dir: str, gcs_bucket: str = None, region_code: str = None):
     """
     Orchestrates a full conversation with the YouTube agent to find and download
     transcripts.
@@ -117,9 +110,12 @@ async def run_youtube_downloader_agent(query: str, language: str, max_results: i
 
     # --- Step 1: Initial Search Query ---
     initial_query = (
-        f"Please find the top {max_results} videos about '{query}'. "
-        "Do not download anything yet, just show me the results."
+        f"Please find the top {max_results} videos about '{query}'"
     )
+    if region_code:
+        initial_query += f" with a preference for results from the region '{region_code}'."
+    initial_query += " Do not download anything yet, just show me the results."
+    
     search_results_text = await call_agent_async(initial_query, user_id, session_id)
 
     # --- Step 2: Extract Video Info & Formulate Download Query ---
@@ -132,8 +128,14 @@ async def run_youtube_downloader_agent(query: str, language: str, max_results: i
         f"Great. Now please download the {download_target} in '{language}' for all the videos you just found. "
         f"Save everything into the '{output_dir}' directory."
     )
+
+    # Conditionally add upload instruction if a bucket is specified
+    if gcs_bucket:
+        download_query += (
+            f" After the download is complete, please upload all successfully downloaded files to the GCS bucket named '{gcs_bucket}'."
+        )
     
-    # --- Step 3: Download Transcripts ---
+    # --- Step 3: Download and a half: Upload ---
     await call_agent_async(download_query, user_id, session_id)
 
 if __name__ == '__main__':
@@ -154,7 +156,9 @@ if __name__ == '__main__':
                 language="en",
                 max_results=3,
                 download_target="transcript",
-                output_dir="./downloads"
+                output_dir="./downloads",
+                gcs_bucket=None, # Or a bucket name to test upload e.g., "my-youtube-data-bucket"
+                region_code="IN"
             ))
         except Exception as e:
             print(f"An error occurred during the agent run: {e}")

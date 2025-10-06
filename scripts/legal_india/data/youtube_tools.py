@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Third-party libraries, assuming they are installed via requirements.txt
 from googleapiclient.discovery import build
+from google.cloud import storage
 import yt_dlp
 
 # Configure logging
@@ -45,7 +46,7 @@ class YouTubeAPIClient:
                 cls._instance.youtube = None
         return cls._instance
 
-    def search_videos(self, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
+    def search_videos(self, query: str, max_results: int = 10, region_code: Optional[str] = None) -> List[Dict[str, Any]]:
         """Search for videos with pagination and return structured metadata."""
         if not self.youtube:
             return [{"status": "error", "error_message": "YouTube client not initialized."}]
@@ -64,7 +65,8 @@ class YouTubeAPIClient:
                     maxResults=results_to_fetch,
                     type='video',
                     videoCaption='closedCaption',
-                    pageToken=next_page_token
+                    pageToken=next_page_token,
+                    regionCode=region_code
                 )
                 search_response = search_request.execute()
 
@@ -152,15 +154,37 @@ def _download_video_worker(video_info: Dict[str, Any], output_dir: Path) -> Dict
     except Exception as e:
         return {"video_id": video_id, "status": "error", "message": str(e)}
 
+# --- New GCS Worker ---
+def _upload_to_gcs_worker(local_path: str, bucket_name: str, gcs_prefix: str) -> Dict[str, str]:
+    """Worker to upload a single file to GCS."""
+    try:
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        
+        file_path = Path(local_path)
+        destination_blob_name = f"{gcs_prefix}/{file_path.parent.name}/{file_path.name}"
+        
+        blob = bucket.blob(destination_blob_name)
+        blob.upload_from_filename(local_path)
+        
+        gcs_uri = f"gs://{bucket_name}/{destination_blob_name}"
+        logger.info(f"Successfully uploaded {local_path} to {gcs_uri}")
+        return {"local_path": local_path, "status": "success", "gcs_uri": gcs_uri}
+    except Exception as e:
+        logger.error(f"Failed to upload {local_path} to GCS: {e}")
+        return {"local_path": local_path, "status": "error", "message": str(e)}
+
 # --- Agent Tools ---
 
-def search_youtube_videos(query: str, max_results: int = 5) -> str:
+def search_youtube_videos(query: str, max_results: int = 5, region_code: Optional[str] = None) -> str:
     """
-    Searches YouTube for videos with closed captions based on a query.
+    Searches YouTube for videos with closed captions based on a query, optionally
+    biasing results for a specific country.
 
     Args:
         query (str): The search term (e.g., "Supreme Court hearings").
         max_results (int): The maximum number of video results to return.
+        region_code (str): An ISO 3166-1 alpha-2 country code (e.g., 'IN' for India, 'US' for USA).
 
     Returns:
         str: A JSON string containing a list of found videos with their metadata,
@@ -172,7 +196,7 @@ def search_youtube_videos(query: str, max_results: int = 5) -> str:
         return json.dumps({"status": "error", "error_message": "YOUTUBE_API_KEY not set."})
     
     client = YouTubeAPIClient(api_key)
-    results = client.search_videos(query, max_results)
+    results = client.search_videos(query, max_results, region_code)
     return json.dumps(results)
 
 
@@ -219,5 +243,34 @@ def download_media_in_parallel(videos_json: str, download_target: str, language:
                  results["transcript_downloads"].append(result)
             else:
                  results["video_downloads"].append(result)
+
+    return json.dumps(results, indent=2)
+
+def upload_files_to_gcs_in_parallel(local_files_json: str, bucket_name: str, gcs_prefix: str = "youtube_data", max_workers: int = 10) -> str:
+    """
+    Uploads a list of local files to a Google Cloud Storage bucket in parallel.
+
+    Args:
+        local_files_json (str): A JSON string of a list of local file paths to upload.
+        bucket_name (str): The name of the GCS bucket.
+        gcs_prefix (str): A prefix (folder) to use within the GCS bucket.
+        max_workers (int): The maximum number of parallel upload workers.
+
+    Returns:
+        str: A JSON string summarizing the results of the upload operations.
+    """
+    print(f"--- Tool: upload_files_to_gcs_in_parallel called for bucket: {bucket_name} ---")
+    try:
+        local_files = json.loads(local_files_json)
+        if not isinstance(local_files, list):
+            return json.dumps({"status": "error", "message": "Invalid JSON format; expected a list of file paths."})
+    except json.JSONDecodeError:
+        return json.dumps({"status": "error", "message": "Failed to decode JSON."})
+
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_upload_to_gcs_worker, file_path, bucket_name, gcs_prefix) for file_path in local_files]
+        for future in as_completed(futures):
+            results.append(future.result())
 
     return json.dumps(results, indent=2)

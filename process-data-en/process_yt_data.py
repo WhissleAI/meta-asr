@@ -1,10 +1,11 @@
 import os
 import json
 import torch
-import asyncio  # (async leftover for potential future use)
+import asyncio 
 import librosa
 import numpy as np
 import pandas as pd
+import csv
 import moviepy as mp
 import torch.nn as nn
 import soundfile as sf
@@ -47,14 +48,7 @@ if not hasattr(np, 'infty'):
     - JSONL of chunks: audio_filepath, whisper_text, gemini_text, duration, combined tagged text.
 Note: SRT subtitles disabled in this revision (can be re-enabled if needed)."""
 
-# Whisper backend selection:
-#   WHISPER_BACKEND=faster (default) uses faster-whisper
-#   WHISPER_BACKEND=openai uses openai-whisper reference implementation
-#   WHISPER_BACKEND=transformers uses Hugging Face transformers (openai/whisper-large-v3) - RECOMMENDED for GPU
-#   WHISPER_MODEL overrides model size (default large-v3 for faster, large for openai, openai/whisper-large-v3 for transformers)
-# Automatic fallback: if faster-whisper load/transcribe raises a cuDNN error, we retry with transformers backend.
 
-# ===================== SRT Parsing Utilities =====================
 import re
 from datetime import timedelta
 
@@ -68,7 +62,7 @@ def _srt_timestamp_to_seconds(ts: str) -> float:
     s, ms = s_ms.split(',')
     return int(h)*3600 + int(m)*60 + int(s) + int(ms)/1000.0
 
-## Subtitle utilities removed in this version (SRT disabled). Re-enable if needed.
+
 
 class ModelHead(nn.Module):
     def __init__(self, config, num_labels):
@@ -105,9 +99,7 @@ class AgeGenderModel(Wav2Vec2PreTrainedModel):
         return hidden_states, logits_age, logits_gender
 
 
-############################################################
-# Safe device selection (handles broken CUDA / cuDNN setups)
-############################################################
+
 
 def _cuda_usable() -> bool:
     if not torch.cuda.is_available():
@@ -189,7 +181,7 @@ def get_speaker_changes(audio_path: str):
     return speaker_changes
 
 
-## Transcription functions removed; will rely on pre-downloaded SRT captions.
+
 
 
 def split_audio_by_speaker(audio_path: str, speaker_changes: list, output_dir: str = "spk_dir", max_duration: float = 20.0):
@@ -611,14 +603,31 @@ def gemini_transcribe_segment(audio_path: str) -> str:
             audio_bytes = f.read()
         prompt = (
             "You are a precise court-hearing transcriber. "
-            "Transcribe the spoken audio faithfully. No summaries, no labels. "
-            "Return only the verbatim transcript."
+            "Transcribe the spoken audio faithfully in ENGLISH ONLY. "
+            "If the speech is in another Indian language, output an accurate English transliteration/translation, without brackets. "
+            "Do NOT include speaker labels, summaries, annotations, or language names. "
+            "Return only the plain English transcript."
         )
         response = model.generate_content([
             {"mime_type": "audio/wav", "data": audio_bytes},
             prompt
         ])
         text = (getattr(response, 'text', None) or "").strip()
+        # If non-ASCII detected, attempt a forced-English rephrase once
+        if text and any(ord(c) > 127 for c in text):
+            if os.getenv('GEMINI_DEBUG','0') == '1':
+                print(f"[gemini] Non-English detected, retrying English enforcement: {text}")
+            retry_prompt = (
+                "Provide an English-only transliteration or translation of the previous transcript. "
+                "Do not include any original script characters or explanations. Only the English text."
+            )
+            try:
+                retry_resp = model.generate_content([text, retry_prompt])
+                retry_text = (getattr(retry_resp, 'text', None) or '').strip()
+                if retry_text and all(ord(c) < 128 for c in retry_text):
+                    text = retry_text
+            except Exception as _:
+                pass
         if not text and os.getenv('GEMINI_DEBUG','0') == '1':
             print(f"[gemini] Empty transcription for segment {audio_path} (response: {response})")
         return text
@@ -761,6 +770,26 @@ def process_large_audio(
 
     base_filename = os.path.splitext(os.path.basename(audio_path))[0]
 
+    # Persistent speaker id mapping across ALL chunks (so speaker_0 remains same voice if pyannote stable)
+    global_speaker_id_map: Dict[str, int] = {}
+    global_next_spk_id = 0
+
+    # Speaker constraint parameters (user tunable via env)
+    min_speakers_env = os.getenv('MIN_SPEAKERS')
+    max_speakers_env = os.getenv('MAX_SPEAKERS')
+    try:
+        min_speakers = int(min_speakers_env) if min_speakers_env else 2  # default assume dialogue
+    except ValueError:
+        min_speakers = 2
+    try:
+        max_speakers = int(max_speakers_env) if max_speakers_env else None
+    except ValueError:
+        max_speakers = None
+
+    if max_speakers is not None and max_speakers < min_speakers:
+        # sanity swap
+        max_speakers = None
+
     try:
         for chunk_idx in range(0, len(signal), chunk_size):
             if torch.cuda.is_available():
@@ -783,14 +812,28 @@ def process_large_audio(
                     print("[process_large_audio] Skipping diarization (pipeline unavailable).")
                     speaker_changes = []
                 else:
-                    diarization = pipeline({'audio': chunk_path})
+                    diarization_kwargs = {'audio': chunk_path}
+                    # pyannote Pipeline expects positional path OR dict; for constraints we call with path string
+                    # Use path form when supplying min/max to leverage built-in segmentation clustering
+                    if max_speakers is not None:
+                        diarization = pipeline(
+                            chunk_path,
+                            min_speakers=min_speakers,
+                            max_speakers=max_speakers
+                        )
+                    else:
+                        diarization = pipeline(
+                            chunk_path,
+                            min_speakers=min_speakers
+                        )
                     speaker_changes = [
                         (turn.start, turn.end, speaker)
                         for turn, _, speaker in diarization.itertracks(yield_label=True)
                     ]
                 # Assign incremental speaker ids mapping original labels to numeric order of appearance
-                speaker_id_map = {}
-                next_spk_id = 0
+                # Use global maps so a speaker label repeated in later chunks keeps same numeric id
+                speaker_id_map = global_speaker_id_map
+                next_spk_id = global_next_spk_id
                 # Whisper chunk transcription (once per chunk)
                 whisper_words = transcribe_chunk_whisper(chunk_path)
 
@@ -799,6 +842,8 @@ def process_large_audio(
                         speaker_id_map[speaker] = next_spk_id
                         next_spk_id += 1
                     numeric_speaker = speaker_id_map[speaker]
+                    # Update global next id after potential assignment
+                    global_next_spk_id = next_spk_id
                     start_sample = int(start_time * sr)
                     end_sample = int(end_time * sr)
 
@@ -852,7 +897,7 @@ def process_large_audio(
                         segment = AudioSegment(
                             start_time=start_time,
                             end_time=end_time,
-                            speaker=f"speaker_{numeric_speaker}",
+                            speaker=f"speaker_{numeric_speaker}",  # legacy field
                             age=float(age),
                             gender=int(gender),
                             text=whisper_text,
@@ -868,6 +913,8 @@ def process_large_audio(
                             'start_time': start_time,
                             'end_time': end_time,
                             'speaker': f"speaker_{numeric_speaker}",
+                            'speaker_index': numeric_speaker,
+                            'speaker_tag': f"speaker_{numeric_speaker}",
                             'age': float(age),
                             'gender': int(gender),
                             'whisper_text': whisper_text,
@@ -905,6 +952,8 @@ def process_large_audio(
             last_speaker = None
             speaker_change_counter = {}
             seq = []
+            # Aggregation for speaker CSV
+            speaker_stats: Dict[int, Dict[str, Any]] = {}
             for seg in all_data:
                 spk = seg['speaker']
                 if spk != last_speaker:
@@ -916,6 +965,22 @@ def process_large_audio(
                     last_speaker = spk
                 else:
                     seg['speaker_change_tag'] = f"speaker_change_{speaker_change_counter[spk]}"
+                # Collect stats
+                spk_index = seg.get('speaker_index')
+                if spk_index is not None:
+                    entry = speaker_stats.setdefault(spk_index, {
+                        'speaker_index': spk_index,
+                        'speaker_tag': seg.get('speaker_tag', spk),
+                        'first_start_time': seg['start_time'],
+                        'cumulative_duration': 0.0,
+                        'segment_count': 0
+                    })
+                    duration = float(seg['end_time'] - seg['start_time'])
+                    entry['cumulative_duration'] += max(0.0, duration)
+                    entry['segment_count'] += 1
+                    # Keep earliest start
+                    if seg['start_time'] < entry['first_start_time']:
+                        entry['first_start_time'] = seg['start_time']
                 seq.append(seg)
 
             # Save consolidated JSON
@@ -923,6 +988,26 @@ def process_large_audio(
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(seq, f, ensure_ascii=False, indent=2)
             print(f"Saved JSON to: {json_path}")
+
+            # Write speaker mapping CSV
+            if speaker_stats:
+                csv_path = os.path.join(results_dir, f"{base_filename}_speaker_mapping.csv")
+                try:
+                    with open(csv_path, 'w', newline='', encoding='utf-8') as cf:
+                        writer = csv.writer(cf)
+                        writer.writerow(["speaker_index", "speaker_tag", "first_start_time", "cumulative_duration", "segment_count"])
+                        for idx in sorted(speaker_stats.keys()):
+                            s = speaker_stats[idx]
+                            writer.writerow([
+                                s['speaker_index'],
+                                s['speaker_tag'],
+                                round(s['first_start_time'], 3),
+                                round(s['cumulative_duration'], 3),
+                                s['segment_count']
+                            ])
+                    print(f"Saved speaker mapping CSV to: {csv_path}")
+                except Exception as e:
+                    print(f"[speaker-csv] Failed writing speaker mapping CSV: {e}")
 
             # Build JSONL of audio_filepath, text, duration
             jsonl_path = os.path.join(results_dir, f"{base_filename}_audio_text_pairs.jsonl")

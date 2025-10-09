@@ -7,10 +7,16 @@ import os
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import pyarrow.parquet as pq
+import pyarrow as pa
 from glob import glob
 from huggingface_hub import snapshot_download
 import logging
 import io
+import time as _time
+try:
+    import psutil  # optional for detailed memory logging
+except ImportError:  # graceful fallback
+    psutil = None
 
 
 logger = logging.getLogger(__name__)
@@ -349,7 +355,8 @@ def process_parquet_dataset(
     output_jsonl_path: str,
     audio_subdir: str = None,
     batch_size: int = 25,
-    max_rows: int | None = None
+    max_rows: int | None = None,
+    resume_skip: int = 0
 ):
     """Iterate over VoiceAssistant-400K parquet shards and annotate QA.
     Input parquet expected columns: 'question', 'question_audio', 'answer'.
@@ -367,6 +374,8 @@ def process_parquet_dataset(
     os.makedirs(os.path.dirname(output_jsonl_path), exist_ok=True)
     out_f = open(output_jsonl_path, 'w', encoding='utf-8')
     print(f"Writing JSONL to {output_jsonl_path}")
+    if resume_skip > 0:
+        print(f"[resume] Will skip first {resume_skip} already-processed records (not re-written).")
 
     # Load local models once (age/gender/emotion)
     print("Loading local audio attribute models (age/gender/emotion)...")
@@ -399,9 +408,18 @@ def process_parquet_dataset(
 
     parquet_paths = sorted(glob(os.path.join(dataset_dir, 'data', 'train-*.parquet')))
     print(f"Found {len(parquet_paths)} parquet shards.")
+    # Allow limiting shards for debugging via env
+    max_shards_env = os.getenv('MAX_SHARDS')
+    if max_shards_env:
+        try:
+            limit = int(max_shards_env)
+            parquet_paths = parquet_paths[:limit]
+            print(f"[debug] Limiting to first {limit} shards via MAX_SHARDS env.")
+        except ValueError:
+            pass
 
     buffer: List[Dict[str, Any]] = []
-    processed = 0
+    processed = 0  # total logical records seen (including skipped)
 
     # Derive a probable audio root under dataset if not explicitly provided
     inferred_audio_root = audio_subdir or os.path.join(dataset_dir, 'data', 'audio')
@@ -413,13 +431,45 @@ def process_parquet_dataset(
         else:
             inferred_audio_root = dataset_dir
 
+    mem_log_interval = int(os.getenv('MEM_LOG_INTERVAL', '2000'))  # log every N processed
+    last_mem_log = 0
+
+    def _rss_gb():
+        if psutil:
+            return psutil.Process(os.getpid()).memory_info().rss / (1024**3)
+        # Fallback using /proc/self/statm
+        try:
+            with open('/proc/self/statm', 'r') as f:
+                pages = int(f.read().split()[0])
+            return pages * (os.sysconf('SC_PAGE_SIZE') / (1024**3))
+        except Exception:
+            return -1.0
+
     for shard_idx, parquet_path in enumerate(parquet_paths):
         print(f"Reading shard {shard_idx+1}/{len(parquet_paths)}: {os.path.basename(parquet_path)}")
-        table = pq.read_table(parquet_path)
-        pandas_df = table.to_pandas()
-        for _, row in pandas_df.iterrows():
-            if max_rows is not None and processed >= max_rows:
-                break
+        try:
+            pq_file = pq.ParquetFile(parquet_path)
+        except Exception as e_open:
+            print(f"[warn] Failed opening parquet shard {parquet_path}: {e_open}")
+            continue
+        # Iterate in smaller record batches to reduce peak memory
+        for batch in pq_file.iter_batches(batch_size=int(os.getenv('PARQUET_BATCH_ROWS', '1024'))):
+            # Convert record batch to pandas DataFrame (limited rows)
+            try:
+                table_batch = pa.Table.from_batches([batch])
+                pandas_df = table_batch.to_pandas()
+            except Exception as e_conv:
+                print(f"[warn] Failed converting batch to pandas: {e_conv}")
+                continue
+            for _, row in pandas_df.iterrows():
+                if max_rows is not None and processed >= max_rows:
+                    break
+                # Fast skip before any heavy work if within resume boundary
+                if processed < resume_skip:
+                    processed += 1
+                    if processed == resume_skip:
+                        print(f"[resume] Finished skipping {resume_skip} records. Resuming writes now.")
+                    continue
             question = str(row.get('question', '')).strip()
             answer = str(row.get('answer', '')).strip()
             qa_audio_struct = row.get('question_audio')
@@ -543,6 +593,27 @@ def process_parquet_dataset(
                 out_f.flush()
                 print(f"Wrote {processed} records so far.")
                 buffer = []
+                # Aggressive cleanup to mitigate memory growth
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            # Periodic memory log
+            if processed - last_mem_log >= mem_log_interval:
+                rss = _rss_gb()
+                if rss >= 0:
+                    print(f"[mem] RSS={rss:.2f} GB after {processed} records (shard {shard_idx+1}).")
+                last_mem_log = processed
+
+            if max_rows is not None and processed >= max_rows:
+                break
+
+            # End inner row loop
+        # Explicitly drop DataFrame references
+        del pandas_df
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         if max_rows is not None and processed >= max_rows:
             break
@@ -564,15 +635,33 @@ def process_parquet_dataset(
         print(f"Wrote final batch. Total {processed} records.")
 
     out_f.close()
-    print(f"✅ Completed. Total records written: {processed}")
+    print(f"✅ Completed. Total logical records processed: {processed} (resume_skip={resume_skip}).")
+    if resume_skip > 0:
+        print(f"✅ Newly written records this run: {processed - resume_skip}")
 
 
 # --- Configuration and Execution ---
 # !!! IMPORTANT: Update these paths to your specific directories !!!
-VOICE_ASSISTANT_DIR = "/external3/databases/hf-omini-data/VoiceAssistant-400K"
-OUTPUT_JSONL = "/external3/databases/hf-omini-data/voiceassistant_annotated_2.jsonl"
-PROCESSING_BATCH_SIZE = 25
-MAX_ROWS_DEBUG = None  # Set to None for full dataset
+VOICE_ASSISTANT_DIR = os.getenv("VOICE_ASSISTANT_DIR", "/external3/databases/hf-omini-data/VoiceAssistant-400K")
+OUTPUT_JSONL_BASE = os.getenv("OUTPUT_JSONL", "/external3/databases/hf-omini-data/voiceassistant_annotated_2.jsonl")
+RESUME_SKIP_ENV = os.getenv("RESUME_SKIP", "0")
+try:
+    RESUME_SKIP = int(RESUME_SKIP_ENV)
+except ValueError:
+    RESUME_SKIP = 0
+
+# If resuming, derive a new output file so we don't overwrite previous work
+if RESUME_SKIP > 0:
+    stem, ext = os.path.splitext(OUTPUT_JSONL_BASE)
+    if ext == "":
+        ext = ".jsonl"
+    OUTPUT_JSONL = f"{stem}_from_{RESUME_SKIP}{ext}"
+else:
+    OUTPUT_JSONL = OUTPUT_JSONL_BASE
+
+PROCESSING_BATCH_SIZE = int(os.getenv("PROCESSING_BATCH_SIZE", "25"))
+MAX_ROWS_DEBUG_ENV = os.getenv("MAX_ROWS_DEBUG", "None")
+MAX_ROWS_DEBUG = None if MAX_ROWS_DEBUG_ENV == "None" else int(MAX_ROWS_DEBUG_ENV)
 
 if __name__ == "__main__":
     print("Starting VoiceAssistant QA Annotation Workflow...")
@@ -584,7 +673,8 @@ if __name__ == "__main__":
             output_jsonl_path=OUTPUT_JSONL,
             audio_subdir=os.path.join(VOICE_ASSISTANT_DIR, 'data', 'audio'),
             batch_size=PROCESSING_BATCH_SIZE,
-            max_rows=MAX_ROWS_DEBUG
+            max_rows=MAX_ROWS_DEBUG,
+            resume_skip=RESUME_SKIP
         )
     except Exception as e:
         print(f"FATAL ERROR: {e}")

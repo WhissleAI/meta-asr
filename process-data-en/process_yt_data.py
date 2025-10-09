@@ -36,21 +36,30 @@ if not hasattr(np, 'infty'):
 
 
 
-"""Updated pipeline (dual transcription edition):
+"""Updated pipeline (multi transcription edition):
 1. Performs speaker diarization per chunk, maps numeric speaker ids (speaker_0, speaker_1, ...).
-2. High quality Whisper (large-v3 via faster-whisper) chunk-level transcription, then assigns words to speaker segments.
-3. Optional Gemini transcription per segment (if GEMINI_API_KEY set). If unavailable, remains empty.
-4. Gemini-based entity + intent extraction stub with court-hearing focused prompt (returns empty if no API key).
-5. Age / Gender / Emotion tagging per speaker segment.
-6. speaker_change_X tag added on first occurrence of a speaker in chronological order.
-7. Outputs:
-    - Consolidated JSON with all segment metadata including whisper_text, gemini_text, entities, intents.
-    - JSONL of chunks: audio_filepath, whisper_text, gemini_text, duration, combined tagged text.
-Note: SRT subtitles disabled in this revision (can be re-enabled if needed)."""
+2. High quality Whisper (faster-whisper OR transformers) chunk-level transcription, then assigns words to speaker segments.
+3. Optional Gemini transcription per segment (gemini_text) if GEMINI_API_KEY / GOOGLE_API_KEY set.
+4. Optional Deepgram transcription per segment (deepgram_text) if DEEPGRAM_API_KEY set.
+5. Gemini-based entity + intent extraction with court-hearing focus.
+6. Age / Gender / Emotion tagging per speaker segment.
+7. speaker_change_X tag added on first occurrence of a speaker in chronological order.
+8. Outputs:
+    - Consolidated JSON with all segment metadata including whisper_text, gemini_text, deepgram_text, entities, intents.
+    - JSONL of chunks: audio_filepath, whisper_text, gemini_text, deepgram_text, duration, combined tagged text.
+Note: SRT subtitles disabled in this revision (can be re-enabled if needed).
+
+Added (Oct 2025):
+ - Optional WebVTT ingestion (pass folder containing matching .mp4 & .vtt or ensure same basename). 
+ - Each segment gains 'vtt_text'.
+ - Entity/intent extraction prefers vtt_text if available (then gemini_text, then whisper_text).
+ - JSON & JSONL outputs include vtt_text.
+"""
 
 
 import re
 from datetime import timedelta
+import sys
 
 SRT_TIME_PATTERN = re.compile(r"(?P<h>\d{2}):(\d{2}):(\d{2}),(\d{3})")
 
@@ -61,6 +70,39 @@ def _srt_timestamp_to_seconds(ts: str) -> float:
     h, m, s_ms = ts.split(':')
     s, ms = s_ms.split(',')
     return int(h)*3600 + int(m)*60 + int(s) + int(ms)/1000.0
+
+
+def _merge_vtt_cues_texts(cue_texts: List[str]) -> str:
+    """Merge a list of VTT cue texts while removing overlap-based repetition.
+    Uses token-level suffix/prefix matching on lowercase tokens to detect overlaps,
+    but preserves the original tokens in the final output.
+    """
+    result_raw: List[str] = []
+    result_norm: List[str] = []
+    for text in cue_texts:
+        if not text:
+            continue
+        tokens_raw = text.strip().split()
+        if not tokens_raw:
+            continue
+        tokens_norm = [t.lower() for t in tokens_raw]
+        if not result_raw:
+            result_raw = tokens_raw[:]
+            result_norm = tokens_norm[:]
+            continue
+        max_k = min(len(result_norm), len(tokens_norm))
+        # Cap overlap search to a reasonable window to avoid O(n^2) cost on huge segments
+        max_k = min(max_k, 30)
+        overlap = 0
+        for k in range(max_k, 0, -1):
+            if result_norm[-k:] == tokens_norm[:k]:
+                overlap = k
+                break
+        # Append only the non-overlapping tail from the raw tokens
+        if overlap < len(tokens_raw):
+            result_raw.extend(tokens_raw[overlap:])
+            result_norm.extend(tokens_norm[overlap:])
+    return " ".join(result_raw)
 
 
 
@@ -300,8 +342,10 @@ class AudioSegment:
     text: str  # Backward compatibility: will store whisper_text
     whisper_text: str
     gemini_text: str
+    vtt_text: str  # Newly added: raw text from matching WebVTT cues overlapping this segment
     emotion: str
     chunk_filename: str
+    deepgram_text: str = ""
     entities: List[Dict[str, Any]] = field(default_factory=list)
     intents: List[str] = field(default_factory=list)
 
@@ -561,6 +605,43 @@ def transcribe_chunk_whisper(audio_path: str) -> List[Dict[str, Any]]:
 
 _gemini_ready = False
 _gemini_model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')  # 1.5 flash deprecated -> use 2.0
+_deepgram_ready = False
+
+def _init_deepgram():
+    """Initialize Deepgram lazily. Returns True if usable."""
+    global _deepgram_ready
+    if _deepgram_ready:
+        return True
+    if not os.getenv('DEEPGRAM_API_KEY'):
+        return False
+    _deepgram_ready = True
+    return True
+
+def deepgram_transcribe_segment(audio_path: str) -> str:
+    if not _init_deepgram():
+        return ""
+    api_key = os.getenv('DEEPGRAM_API_KEY')
+    model = os.getenv('DEEPGRAM_MODEL', 'nova-2-general')
+    try:
+        import requests
+        with open(audio_path, 'rb') as f:
+            resp = requests.post(
+                'https://api.deepgram.com/v1/listen',
+                params={'model': model, 'language': 'en', 'smart_format': 'true'},
+                headers={'Authorization': f'Token {api_key}'},
+                data=f
+            )
+        if resp.status_code != 200:
+            if os.getenv('DEEPGRAM_DEBUG','0') == '1':
+                print(f"[deepgram] HTTP {resp.status_code}: {resp.text[:160]}")
+            return ""
+        j = resp.json()
+        text = j.get('results', {}).get('channels', [{}])[0].get('alternatives', [{}])[0].get('transcript', '')
+        return text.strip()
+    except Exception as e:
+        if os.getenv('DEEPGRAM_DEBUG','0') == '1':
+            print(f"[deepgram] Error: {e}")
+        return ""
 
 def _init_gemini():
     """Initialise Gemini. Accepts GEMINI_API_KEY or GOOGLE_API_KEY.
@@ -687,6 +768,7 @@ def gemini_entities_intents(text: str) -> Tuple[List[Dict[str, Any]], List[str]]
 class ChunkData:
     segments: List[AudioSegment] = field(default_factory=list)
     filepath: str = ""
+    duration_secs: float = 0.0  # true chunk duration (len(chunk)/sr)
 
     def get_formatted_text(self) -> str:
         texts: List[str] = []
@@ -738,7 +820,8 @@ def create_output_directories(base_path: str) -> Tuple[str, str]:
 def process_large_audio(
     audio_path: str,
     chunk_duration: float = 20.0,
-    output_base_dir: str = "output"
+    output_base_dir: str = "output",
+    vtt_path: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
     chunks_dir = os.path.abspath(os.path.join(output_base_dir, "audio_chunks"))
     results_dir = os.path.abspath(os.path.join(output_base_dir, "results"))
@@ -748,7 +831,15 @@ def process_large_audio(
 
     processed_audio_path = convert_mp4_to_wav(audio_path, preferred_out_dir=os.path.join(output_base_dir, "audio_converted"))
     print(f"[process_large_audio] Using audio: {processed_audio_path}")
-    subtitles = []  # Subtitles permanently disabled
+    # --- WebVTT (optional) ---
+    vtt_cues: List[Dict[str, Any]] = []
+    if vtt_path and os.path.exists(vtt_path):
+        try:
+            vtt_cues = parse_webvtt(vtt_path)
+            print(f"[VTT] Loaded {len(vtt_cues)} cues from {vtt_path}")
+        except Exception as e:
+            print(f"[VTT] Failed parsing {vtt_path}: {e}")
+    subtitles = []  # Legacy placeholder (SRT disabled)
     # Precompute for quick lookup
     # We'll do a simple linear scan (subtitle count usually small); could index if large
     try:
@@ -801,11 +892,17 @@ def process_large_audio(
             if len(chunk) / sr < 1.0:
                 continue
 
-            chunk_filename = f"{base_filename}_chunk_{chunk_idx//chunk_size}.wav"
+            chunk_index = chunk_idx // chunk_size
+            chunk_filename = f"{base_filename}_chunk_{chunk_index}.wav"
             chunk_path = os.path.join(chunks_dir, chunk_filename)
 
             if not os.path.exists(chunk_path):
                 sf.write(chunk_path, chunk, sr)
+
+            # Record true chunk duration for JSONL output
+            true_chunk_duration = float(len(chunk)) / float(sr)
+            chunk_data[chunk_filename].duration_secs = true_chunk_duration
+            chunk_data[chunk_filename].filepath = os.path.abspath(chunk_path)
 
             try:
                 if pipeline is None:
@@ -836,6 +933,9 @@ def process_large_audio(
                 next_spk_id = global_next_spk_id
                 # Whisper chunk transcription (once per chunk)
                 whisper_words = transcribe_chunk_whisper(chunk_path)
+
+                # Absolute time offset of this chunk in seconds (for VTT alignment)
+                chunk_offset_sec = float(chunk_idx) / float(sr)
 
                 for speaker_idx, (start_time, end_time, speaker) in enumerate(speaker_changes):
                     if speaker not in speaker_id_map:
@@ -881,17 +981,34 @@ def process_large_audio(
                                 seg_words.append(w['text'])
                         whisper_text = ' '.join(seg_words).strip()
 
-                        # Gemini transcription (always call for every segment)
+                        # Gemini & Deepgram transcription (always call when keys set)
                         gemini_text = gemini_transcribe_segment(temp_segment_path)
+                        deepgram_text = deepgram_transcribe_segment(temp_segment_path)
 
-                        # Entities & intents via Gemini from both transcriptions
-                        # First try gemini_text, then fallback to whisper_text, combine results
-                        entities_gemini, intents_gemini = gemini_entities_intents(gemini_text) if gemini_text else ([], [])
-                        entities_whisper, intents_whisper = gemini_entities_intents(whisper_text) if whisper_text else ([], [])
-                        
-                        # Combine entities and intents from both sources (deduplicate)
-                        entities = entities_gemini + [e for e in entities_whisper if e not in entities_gemini]
-                        intents = list(set(intents_gemini + intents_whisper))
+                        # --- VTT text extraction for this speaker segment ---
+                        vtt_text = ""
+                        if vtt_cues:
+                            # Convert diarization-relative times to absolute media times
+                            seg_abs_start = chunk_offset_sec + float(start_time)
+                            seg_abs_end = chunk_offset_sec + float(end_time)
+                            seg_vtt = []
+                            for cue in vtt_cues:
+                                # Overlap condition in absolute time
+                                if cue['end'] >= seg_abs_start and cue['start'] <= seg_abs_end:
+                                    seg_vtt.append(cue['text'])
+                            # Merge with overlap-aware logic to reduce repetition
+                            vtt_text = _merge_vtt_cues_texts(seg_vtt).strip()
+                            # Debug print (show number of cues merged and preview)
+                            if vtt_text:
+                                print(f"[VTT][{chunk_filename}] {seg_abs_start:.3f}-{seg_abs_end:.3f} cues={len(seg_vtt)} -> {vtt_text[:200]}")
+                            else:
+                                print(f"[VTT][{chunk_filename}] {seg_abs_start:.3f}-{seg_abs_end:.3f} cues=0 -> (no overlap)")
+
+                        # Entities & intents: use ONLY VTT text for annotation per user request
+                        if vtt_text and vtt_text.strip():
+                            entities, intents = gemini_entities_intents(vtt_text)
+                        else:
+                            entities, intents = [], []
 
                         # Backward compatibility: set text to whisper_text
                         segment = AudioSegment(
@@ -903,6 +1020,8 @@ def process_large_audio(
                             text=whisper_text,
                             whisper_text=whisper_text,
                             gemini_text=gemini_text,
+                            vtt_text=vtt_text,
+                            deepgram_text=deepgram_text,
                             emotion=emotion,
                             chunk_filename=chunk_filename,
                             entities=entities,
@@ -918,7 +1037,9 @@ def process_large_audio(
                             'age': float(age),
                             'gender': int(gender),
                             'whisper_text': whisper_text,
+                            'vtt_text': vtt_text,
                             'gemini_text': gemini_text,
+                            'deepgram_text': deepgram_text,
                             'entities': entities,
                             'intents': intents,
                             'emotion': emotion,
@@ -928,7 +1049,6 @@ def process_large_audio(
                         all_data.append(segment_data)
 
                         chunk_data[chunk_filename].segments.append(segment)
-                        chunk_data[chunk_filename].filepath = os.path.abspath(chunk_path)
 
                     except Exception as e:
                         print(f"Error processing segment in chunk {chunk_filename}: {str(e)}")
@@ -1013,18 +1133,20 @@ def process_large_audio(
             jsonl_path = os.path.join(results_dir, f"{base_filename}_audio_text_pairs.jsonl")
             with open(jsonl_path, 'w', encoding='utf-8') as jf:
                 for chunk_name, cdata in chunk_data.items():
-                    # Duration = last end_time - first start_time across segments in that chunk
+                        # Use true chunk duration (not derived from diarization overlap)
                     if cdata.segments:
-                        start_times = [s.start_time for s in cdata.segments]
-                        end_times = [s.end_time for s in cdata.segments]
-                        duration = float(max(end_times) - min(start_times))
+                        duration = float(cdata.duration_secs) if getattr(cdata, 'duration_secs', 0.0) else 0.0
                         whisper_join = ' '.join([seg.whisper_text for seg in cdata.segments if seg.whisper_text])
+                        vtt_join = ' '.join([seg.vtt_text for seg in cdata.segments if getattr(seg, 'vtt_text', '')])
                         gemini_join = ' '.join([seg.gemini_text for seg in cdata.segments if seg.gemini_text])
+                        deepgram_join = ' '.join([seg.deepgram_text for seg in cdata.segments if getattr(seg, 'deepgram_text', '')])
                         tagged_text = cdata.get_formatted_text()
                         entry = {
                             "audio_filepath": cdata.filepath,
                             "whisper_text": whisper_join.strip(),
+                            "vtt_text": vtt_join.strip(),
                             "gemini_text": gemini_join.strip(),
+                            "deepgram_text": deepgram_join.strip(),
                             "tagged_text": tagged_text,
                             "duration": duration
                         }
@@ -1042,9 +1164,72 @@ def process_large_audio(
         return [], []
 
 
+def parse_webvtt(vtt_file: str) -> List[Dict[str, Any]]:
+    """Parse a WebVTT file into a list of cues: [{'start': seconds, 'end': seconds, 'text': str}]"""
+    cues: List[Dict[str, Any]] = []
+    if not os.path.exists(vtt_file):
+        return cues
+    with open(vtt_file, 'r', encoding='utf-8') as f:
+        lines = [ln.rstrip('\n') for ln in f]
+
+    # Remove potential BOM
+    if lines and lines[0].startswith('\ufeff'):
+        lines[0] = lines[0].lstrip('\ufeff')
+
+    timestamp_re = re.compile(r"^(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})")
+    buffer_text: List[str] = []
+    start_ts = end_ts = None
+
+    def flush():
+        nonlocal buffer_text, start_ts, end_ts
+        if start_ts and end_ts and buffer_text:
+            # Merge lines, drop duplicate consecutive lines common in VTT
+            merged_lines: List[str] = []
+            for t in buffer_text:
+                if not merged_lines or merged_lines[-1] != t:
+                    merged_lines.append(t)
+            raw = " ".join(merged_lines).strip()
+            # Clean inline tags like <00:13:17.279><c> word </c>
+            raw = re.sub(r"<\/?c>", "", raw)  # remove <c> tags
+            # Remove inline timestamp tags <HH:MM:SS.mmm>
+            raw = re.sub(r"<\d{2}:\d{2}:\d{2}\.\d{3}>", "", raw)
+            # Collapse multiple spaces
+            raw = re.sub(r"\s+", " ", raw)
+            raw = raw.strip()
+            if raw:
+                cues.append({
+                    'start': _srt_timestamp_to_seconds(start_ts.replace('.',',')),  # reuse existing converter
+                    'end': _srt_timestamp_to_seconds(end_ts.replace('.',',')),
+                    'text': raw
+                })
+        buffer_text = []
+        start_ts = end_ts = None
+
+    for line in lines:
+        if not line.strip():
+            flush()
+            continue
+        ts_match = timestamp_re.match(line.strip())
+        if ts_match:
+            flush()
+            start_ts, end_ts = ts_match.group(1), ts_match.group(2)
+            continue
+        # Skip header metadata lines and style/alignment lines
+        if (line.startswith('WEBVTT') or line.startswith('Kind:') or line.startswith('Language:') or
+            'align:' in line or 'position:' in line or 'line:' in line):
+            continue
+        buffer_text.append(line)
+    flush()
+    return cues
+
+
 if __name__ == "__main__":
-    download_dir = "/external4/datasets/youtube_videos"
-    output_dir = "/external4/datasets/youtube_videos"
+    # Allow passing a directory via CLI; default remains legacy path.
+    if len(sys.argv) > 1:
+        download_dir = sys.argv[1]
+    else:
+        download_dir = "/external4/datasets/legal_data/youtube_data/_Bo05lJfCv4-SPL._REF._NO._12025_-_Constitution_Bench"
+    output_dir = download_dir  # save results alongside unless overridden
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Processing files from: {download_dir}")
@@ -1052,12 +1237,44 @@ if __name__ == "__main__":
 
     audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg', '.webm', '.mkv']
 
+    def find_matching_vtt(media_path: str) -> Optional[str]:
+        """Find a VTT file matching the media basename.
+        Order of preference:
+          1. exact basename.vtt
+          2. basename.<lang>.vtt (e.g., .en.vtt, .en-US.vtt)
+          3. underscore normalized variants of 1 & 2
+        Returns first match found or None.
+        """
+        directory = os.path.dirname(media_path)
+        base = os.path.splitext(os.path.basename(media_path))[0]
+        candidates: List[str] = []
+        # Exact
+        candidates.append(os.path.join(directory, base + '.vtt'))
+        # Underscore variant
+        candidates.append(os.path.join(directory, base.replace(' ', '_') + '.vtt'))
+        # Language suffixed variants
+        for fname in os.listdir(directory):
+            if not fname.lower().endswith('.vtt'):
+                continue
+            stem = fname[:-4]  # strip .vtt
+            if stem.startswith(base + '.') or stem.startswith(base.replace(' ', '_') + '.'):
+                candidates.append(os.path.join(directory, fname))
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return None
 
-    for filename in os.listdir(download_dir):
+    # Strategy: process each media file and attempt to locate any matching VTT variant
+    for filename in sorted(os.listdir(download_dir)):
         audio_path = os.path.join(download_dir, filename)
-
-        if os.path.isfile(audio_path) and any(filename.lower().endswith(ext) for ext in audio_extensions):
-            print(f"\nProcessing audio file: {filename}")
-            df, _ = process_large_audio(audio_path, output_base_dir=output_dir)
-            print(f"Successfully processed {filename}. Segments: {len(df)}")
-            print("Output JSON saved alongside in results directory.")
+        if not (os.path.isfile(audio_path) and any(filename.lower().endswith(ext) for ext in audio_extensions)):
+            continue
+        candidate_vtt = find_matching_vtt(audio_path)
+        print(f"\nProcessing audio file: {filename}")
+        if candidate_vtt:
+            print(f"Found VTT: {candidate_vtt}")
+        else:
+            print("No matching VTT found; proceeding without external transcript.")
+        df, _ = process_large_audio(audio_path, output_base_dir=output_dir, vtt_path=candidate_vtt)
+        print(f"Successfully processed {filename}. Segments: {len(df)}")
+        print("Output JSON saved alongside in results directory.")

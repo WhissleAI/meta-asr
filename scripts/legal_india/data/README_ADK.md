@@ -1,23 +1,31 @@
-# Google ADK YouTube Agent
+# Google ADK YouTube Data Downloader
 
-This project provides an intelligent, agent-based system for searching YouTube and downloading video transcripts using Google's Agent Development Kit (ADK) and the Gemini family of models.
+This project provides an intelligent, agent-based system for searching and downloading YouTube data using Google's Agent Development Kit (ADK) and the Gemini family of models.
 
-The agent follows a conversational workflow to first find relevant videos based on a user's query and then, upon user confirmation, downloads the transcripts for those videos.
+It has been designed as a robust data collection tool that can search for videos (either across all of YouTube or within a specific channel), download media files (video and/or transcripts), and automatically upload them to a Google Cloud Storage bucket.
 
 ## 🚀 Features
 
 -   **Agentic Workflow**: Utilizes Google ADK for a robust, multi-step, tool-based workflow.
--   **Gemini-Powered**: Leverages the tool-calling capabilities of Gemini models to orchestrate tasks.
--   **Conversational Interaction**: Engages in a simple, two-step conversation to search and then download.
--   **Specialized Tools**: Clean separation of concerns with dedicated tools for YouTube search and transcript downloading.
--   **Easy to Use**: Simplified command-line interface for easy execution.
--   **Secure**: Manages API keys via environment variables or a `.env` file.
+-   **Gemini-Powered**: Leverages the tool-calling capabilities of the `gemini-2.5-pro` model to orchestrate complex tasks.
+-   **Advanced Search**:
+    -   Search globally across YouTube with a text query.
+    -   Restrict searches to a specific channel using its handle (e.g., `SupremeCourtofIndia-1950`).
+    -   Filter search results by country/region (e.g., `IN` for India).
+-   **Flexible Downloads**:
+    -   Download video files (`.mp4`), transcripts (`.vtt`), or both.
+    -   Control the number of parallel downloads to avoid rate-limiting issues.
+-   **Rich Metadata**:
+    -   Fetches detailed metadata for each video (description, view count, likes, etc.).
+    -   Saves this data in a `metadata.json` file alongside each downloaded video.
+-   **Cloud Integration**: Automatically uploads all downloaded files (videos, transcripts, and metadata) to a specified Google Cloud Storage (GCS) bucket.
 
 ## 📋 Requirements
 
 ### System
 -   Python 3.9+
--   `yt-dlp` requires `ffmpeg` to be installed for some operations.
+-   Google Cloud SDK (`gcloud` CLI) for GCS authentication.
+-   `ffmpeg` is required by `yt-dlp` for some video processing operations.
 
 ### Python Dependencies
 All required Python packages are listed in `requirements_agent.txt`.
@@ -28,99 +36,108 @@ All required Python packages are listed in `requirements_agent.txt`.
     If you haven't already, get the code on your local machine.
 
 2.  **Install Dependencies**
-    Install all the necessary Python libraries.
+    It's recommended to use a virtual environment.
     ```bash
+    python -m venv .venv
+    source .venv/bin/activate
     pip install -r requirements_agent.txt
     ```
 
 3.  **Configure API Keys (Crucial Step)**
-    The agent requires two API keys to function:
+    For detailed instructions, see `API_KEY_SETUP.md`. You will need:
     -   **Google API Key** (for Gemini)
     -   **YouTube Data API v3 Key** (for searching videos)
 
-    The recommended way to set them is by creating a `.env` file in the same directory:
-
-    **`.env` file:**
+    The recommended way is to create a `.env` file in this directory:
     ```
-    # Get from Google AI Studio: https://aistudio.google.com/app/apikey
     GOOGLE_API_KEY="YOUR_GEMINI_API_KEY_HERE"
-
-    # Get from Google Cloud Console: https://console.cloud.google.com/apis/credentials
     YOUTUBE_API_KEY="YOUR_YOUTUBE_API_KEY_HERE"
     ```
 
-    Alternatively, you can set them as environment variables or pass them as command-line arguments.
+4.  **Authenticate for GCS Uploads (Important)**
+    To enable uploads to Google Cloud Storage, you must authenticate your local machine using the `gcloud` CLI.
+    ```bash
+    gcloud auth application-default login
+    ```
+    Follow the prompts in your browser to log in. This command saves your credentials in a standard location, allowing the script to automatically use them.
+
+5.  **Export Browser Cookies (Optional, but Recommended)**
+    To avoid "Sign in to confirm you’re not a bot" errors from YouTube during large downloads, it's highly recommended to use a cookies file. This makes your requests look like they are coming from a logged-in browser session.
+
+    -   **How to Export**: Use a browser extension to export your cookies in the `Netscape` format and save them as `cookies.txt`.
+    -   **Recommended Guide**: Follow the official `yt-dlp` instructions here: [How to Export Browser Cookies](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies)
 
 ## ▶️ How to Run the Agent
 
-Use the `run_adk_agent.py` script to start the agent. You just need to provide a search query.
+Use the `run_adk_agent.py` script to start the agent. It offers a wide range of options to customize your data collection.
 
-### Basic Example
-This command will search for the top 5 videos related to the query and download their English transcripts.
+### Command-Line Arguments
 
+-   `query`: The search query (e.g., "live supreme court hearing").
+-   `--language`: Language for the transcript (default: `en`).
+-   `--max-results`: Maximum number of videos to find (default: `100`).
+-   `--download`: What to download: `transcript`, `video`, or `both` (default: `transcript`).
+-   `--output-dir`: Local directory to save files (default: `./downloads`).
+-   `--gcs-bucket`: GCS bucket name to enable uploads.
+-   `--region`: ISO country code to filter search results (e.g., `IN`, `US`).
+-   `--channel`: YouTube channel handle to search within (e.g., `SupremeCourtofIndia-1950`).
+-   `--max-workers`: Number of parallel download threads (default: `5`).
+-   `--cookies`: Path to a `cookies.txt` file to authenticate downloads.
+
+### Examples
+
+**1. Simple Search (Transcripts Only)**
 ```bash
-python run_adk_agent.py "Supreme Court of India live hearing"
+python run_adk_agent.py "latest advancements in AI" --max-results 10
 ```
 
-### Advanced Example
-Specify the number of results and the desired transcript language.
+**2. Advanced Search within a Specific Channel**
+This is the recommended usage for targeted data collection. This command will:
+-   Search for "Supreme Court of India" videos.
+-   Only within the `@SupremeCourtofIndia-1950` channel.
+-   Prioritize results from India (`IN`).
+-   Download both the video and transcript for up to 100 results.
+-   Save them to a specific local directory.
+-   Upload everything to the `legalai-supremecourt-india-youtube` GCS bucket.
+-   Use a maximum of 5 parallel download workers to avoid timeouts.
 
 ```bash
-python run_adk_agent.py "latest advancements in AI" --max-results 10 --language "en"
-```
-
-### Providing API Keys via Command Line
-If you don't want to use a `.env` file, you can provide the keys directly.
-
-```bash
-python run_adk_agent.py "data science tutorials" --google-api-key "AIza..." --youtube-api-key "AIza..."
+python run_adk_agent.py "Supreme Court of India Court" \
+  --max-results 100 \
+  --download both \
+  --output-dir "/Users/karan/Desktop/work/whissle/data/legal_india2" \
+  --gcs-bucket "legalai-supremecourt-india-youtube" \
+  --region IN \
+  --channel "SupremeCourtofIndia-1950" \
+  --max-workers 5 \
+  --cookies "/path/to/your/cookies.txt"
 ```
 
 ## ⚙️ How It Works
 
-The system is composed of three main files:
+The system is a single-shot agent orchestrator. When you run the script, it constructs a detailed prompt for the Gemini model, which then calls the `search_youtube_videos` tool. The main Python script takes the structured JSON output from the agent and then directly calls the `download` and `upload` tools in parallel to complete the workflow. This is more efficient and reliable than a multi-turn conversational approach.
 
-1.  **`run_adk_agent.py` (CLI Runner)**
-    -   This is the entry point.
-    -   It parses user commands (like the query, language, etc.).
-    -   It securely loads and configures the necessary API keys.
-    -   It kicks off the agent's main task.
-
-2.  **`youtube_adk_agent.py` (The Agent)**
-    -   Defines the `Agent` using Google ADK.
-    -   Contains the **instructions** (the "brain") that tell the Gemini model how to behave and in what order to use its tools.
-    -   Specifies which `tools` the agent has access to.
-    -   Manages the conversational flow (search first, then download).
-
-3.  **`youtube_tools.py` (The Tools)**
-    -   Contains the actual functions that perform the work.
-    -   `search_youtube_videos()`: Communicates with the YouTube Data API to find videos.
-    -   `download_video_transcript()`: Uses the `yt-dlp` library to fetch transcripts for a specific video.
-
-### The Agent's Workflow
-
-1.  The user runs the `run_adk_agent.py` script with a query (e.g., "AI ethics").
-2.  The agent receives its first instruction: "Please find the top 5 videos about 'AI ethics'".
-3.  The Gemini model, following its instructions, determines that it needs to use the `search_youtube_videos` tool. It calls the tool with the query.
-4.  The tool returns a JSON list of videos, which the agent presents to the user.
-5.  The `run_adk_agent.py` script immediately sends a follow-up instruction: "Great. Now please download the transcripts...".
-6.  The agent receives this new prompt. Because ADK maintains conversation history, the agent remembers the videos it just found.
-7.  It iterates through the list of videos and calls the `download_video_transcript` tool for each one, using the `video_id` and `title` from the search results.
-8.  After all tool calls are finished, the agent provides a final summary of its work.
+-   **`run_adk_agent.py`**: The command-line interface and entry point.
+-   **`youtube_adk_agent.py`**: Defines the Gemini agent and orchestrates the tool calls.
+-   **`youtube_tools.py`**: Contains the functions that interact with external services (YouTube API, `yt-dlp`, Google Cloud Storage).
 
 ## 📁 Output Structure
 
-Downloaded transcripts are saved in a structured format:
+Downloaded files are saved in a structured and descriptive format.
 
 ```
-./downloads/
-└── <VIDEO_ID>_<SANITIZED_VIDEO_TITLE>/
+<output_dir>/
+└── <VIDEO_ID>-<SANITIZED_VIDEO_TITLE>/
+    ├── metadata.json
+    ├── <SANITIZED_VIDEO_TITLE>.mp4
     └── <SANITIZED_VIDEO_TITLE>.<LANGUAGE>.vtt
 ```
 
 **Example:**
 ```
-./downloads/
-└── dQ_w4w9WgXcQ_Rick_Astley_Never_Gonna_Give_You_Up/
-    └── Rick_Astley_Never_Gonna_Give_You_Up.en.vtt
+/Users/karan/Desktop/work/whissle/data/legal_india2/
+└── mCHbwDTsads-Supreme_Court_of_India_-_Court_1/
+    ├── metadata.json
+    ├── Supreme_Court_of_India_-_Court_1.mp4
+    └── Supreme_Court_of_India_-_Court_1.en.vtt
 ```

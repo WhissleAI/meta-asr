@@ -25,11 +25,14 @@ logger = logging.getLogger(__name__)
 
 # --- Helper Functions & Classes ---
 
-def _sanitize_filename(filename: str) -> str:
-    """Sanitize a string to be a valid filename."""
-    sanitized = re.sub(r'[^\w\-_.]', '_', str(filename).replace(' ', '_'))
-    sanitized = re.sub(r'_+', '_', sanitized)
-    return sanitized.strip('_')[:100]
+def _sanitize_filename(name: str, max_length: int = 100) -> str:
+    """Sanitizes a string to be a valid filename and truncates it."""
+    # Remove invalid characters
+    sanitized = re.sub(r'[\\/*?:"<>|]', "", name)
+    # Replace spaces with underscores
+    sanitized = sanitized.replace(" ", "_")
+    # Truncate to max_length
+    return sanitized[:max_length]
 
 class YouTubeAPIClient:
     """Client for interacting with the YouTube Data API v3."""
@@ -46,70 +49,105 @@ class YouTubeAPIClient:
                 cls._instance.youtube = None
         return cls._instance
 
-    def search_videos(self, query: str, max_results: int = 10, region_code: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Search for videos with pagination and return structured metadata."""
-        if not self.youtube:
-            return [{"status": "error", "error_message": "YouTube client not initialized."}]
+    def __init__(self, api_key: str):
+        self.youtube = build('youtube', 'v3', developerKey=api_key)
+        
+    def get_channel_id(self, channel_handle: str) -> Optional[str]:
+        """Resolves a channel handle to a channel ID."""
+        try:
+            # YouTube API expects handles to start with '@' in search queries
+            q_handle = channel_handle if channel_handle.startswith('@') else f'@{channel_handle}'
+            
+            search_response = self.youtube.search().list(
+                part='id',
+                q=q_handle,
+                type='channel',
+                maxResults=1
+            ).execute()
+            
+            if search_response.get("items"):
+                return search_response["items"][0]["id"]["channelId"]
+            return None
+        except Exception as e:
+            print(f"Error resolving channel handle '{channel_handle}': {e}")
+            return None
 
-        videos = []
+    def search_videos(self, query, max_results=50, region_code=None, channel_id=None):
+        """
+        Searches for videos, handling pagination to retrieve up to max_results.
+        """
+        all_videos = []
         next_page_token = None
 
-        try:
-            while len(videos) < max_results:
-                # API max is 50 per page
-                results_to_fetch = min(max_results - len(videos), 50)
-
-                search_request = self.youtube.search().list(
-                    q=query,
-                    part='id,snippet',
-                    maxResults=results_to_fetch,
-                    type='video',
-                    videoCaption='closedCaption',
+        while len(all_videos) < max_results:
+            page_size = min(50, max_results - len(all_videos))
+            try:
+                # If a channel ID is provided, we search within that channel.
+                # The 'q' parameter can be omitted to get all videos from the channel.
+                request = self.youtube.search().list(
+                    part="snippet",
+                    q=query, # Always use the user's query
+                    type="video",
+                    # videoCaption="closedCaption", # This filter is too restrictive.
+                    maxResults=page_size,
+                    regionCode=region_code,
+                    channelId=channel_id,
                     pageToken=next_page_token,
-                    regionCode=region_code
+                    order="date" # Fetch most recent videos first
                 )
-                search_response = search_request.execute()
+                response = request.execute()
 
-                video_ids = [item['id']['videoId'] for item in search_response.get('items', [])]
+                video_ids = []
+                for item in response.get("items", []):
+                    # Safely extract videoId, skipping any non-video results
+                    if item.get("id", {}).get("kind") == "youtube#video":
+                        video_id = item["id"].get("videoId")
+                        if video_id:
+                            video_ids.append(video_id)
+                
                 if not video_ids:
-                    break  # No more results
+                    break # No more video IDs found on this page
 
-                video_response = self.youtube.videos().list(
-                    part='id,snippet,contentDetails,statistics',
-                    id=','.join(video_ids)
+                # Get detailed video information for the collected IDs
+                video_details_request = self.youtube.videos().list(
+                    part="snippet,contentDetails,statistics",
+                    id=",".join(video_ids)
                 ).execute()
 
-                for item in video_response.get('items', []):
-                    videos.append({
+                for item in video_details_request.get("items", []):
+                    all_videos.append({
                         "video_id": item["id"],
-                        "title": item["snippet"]["title"],
-                        "channel": item["snippet"]["channelTitle"],
-                        "duration": item["contentDetails"]["duration"],
+                        "title": item["snippet"].get("title", "No Title Provided"),
+                        "description": item["snippet"].get("description", ""),
+                        "published_at": item["snippet"].get("publishedAt"),
+                        "channel": item["snippet"].get("channelTitle", "N/A"),
+                        "duration": item["contentDetails"].get("duration"),
                         "view_count": int(item["statistics"].get("viewCount", 0)),
+                        "like_count": int(item["statistics"].get("likeCount", 0)),
+                        "comment_count": int(item["statistics"].get("commentCount", 0)),
                         "url": f"https://www.youtube.com/watch?v={item['id']}"
                     })
 
-                next_page_token = search_response.get('nextPageToken')
+                next_page_token = response.get("nextPageToken")
                 if not next_page_token:
-                    break  # No more pages
-
-            return videos[:max_results] # Return exactly the number requested
-
-        except Exception as e:
-            logger.error(f"An error occurred during YouTube search: {e}")
-            return [{"status": "error", "error_message": str(e)}]
+                    break
+            except Exception as e:
+                print(f"An error occurred during API call: {e}")
+                # Stop paginating if an error occurs
+                break
+        return all_videos
 
 
 # --- Internal Worker Functions (Not exposed as tools) ---
 
-def _download_transcript_worker(video_info: Dict[str, Any], language: str, output_dir: Path) -> Dict[str, Any]:
+def _download_transcript_worker(video_info: Dict[str, Any], language: str, output_dir: Path, cookies_file: Optional[str] = None) -> Dict[str, Any]:
     """Worker to download a single transcript."""
     video_id = video_info['video_id']
-    title = video_info['title']
+    title = video_info.get('title', 'no_title')
     video_url = f"https://www.youtube.com/watch?v={video_id}"
-    sanitized_title = _sanitize_filename(title)
     
-    video_output_dir = output_dir / _sanitize_filename(f"{video_id}_{title}")
+    sanitized_title = _sanitize_filename(title)
+    video_output_dir = output_dir / f"{video_id}-{sanitized_title}"
     video_output_dir.mkdir(parents=True, exist_ok=True)
     
     ydl_opts = {
@@ -118,25 +156,36 @@ def _download_transcript_worker(video_info: Dict[str, Any], language: str, outpu
         'subtitleslangs': [language], 'subtitlesformat': 'vtt',
         'outtmpl': str(video_output_dir / f'{sanitized_title}')
     }
+    if cookies_file:
+        ydl_opts['cookiefile'] = cookies_file
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
         expected_file = video_output_dir / f"{sanitized_title}.{language}.vtt"
         if expected_file.exists():
             return {"video_id": video_id, "status": "success", "path": str(expected_file)}
-        return {"video_id": video_id, "status": "error", "message": "File not found after download."}
+        return {"video_id": video_id, "status": "error", "message": "File not found after download (likely no transcript available)."}
     except Exception as e:
         return {"video_id": video_id, "status": "error", "message": str(e)}
 
-def _download_video_worker(video_info: Dict[str, Any], output_dir: Path) -> Dict[str, Any]:
-    """Worker to download a single video file."""
+def _download_video_worker(video_info: Dict[str, Any], output_dir: Path, cookies_file: Optional[str] = None) -> Dict[str, Any]:
+    """Worker to download a single video file and its metadata."""
     video_id = video_info['video_id']
-    title = video_info['title']
+    title = video_info.get('title', 'no_title')
     video_url = f"https://www.youtube.com/watch?v={video_id}"
-    sanitized_title = _sanitize_filename(title)
 
-    video_output_dir = output_dir / _sanitize_filename(f"{video_id}_{title}")
+    sanitized_title = _sanitize_filename(title)
+    video_output_dir = output_dir / f"{video_id}-{sanitized_title}"
     video_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save metadata to a JSON file
+    metadata_path = video_output_dir / "metadata.json"
+    try:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(video_info, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        print(f"Failed to save metadata for {video_id}: {e}")
+
 
     ydl_opts = {
         'quiet': True, 'no_warnings': True,
@@ -144,6 +193,8 @@ def _download_video_worker(video_info: Dict[str, Any], output_dir: Path) -> Dict
         'outtmpl': str(video_output_dir / f'{sanitized_title}.%(ext)s'),
         'merge_output_format': 'mp4',
     }
+    if cookies_file:
+        ydl_opts['cookiefile'] = cookies_file
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
@@ -162,6 +213,7 @@ def _upload_to_gcs_worker(local_path: str, bucket_name: str, gcs_prefix: str) ->
         bucket = storage_client.bucket(bucket_name)
         
         file_path = Path(local_path)
+        # Use the parent directory (video_id) and filename for a clean GCS path
         destination_blob_name = f"{gcs_prefix}/{file_path.parent.name}/{file_path.name}"
         
         blob = bucket.blob(destination_blob_name)
@@ -176,31 +228,47 @@ def _upload_to_gcs_worker(local_path: str, bucket_name: str, gcs_prefix: str) ->
 
 # --- Agent Tools ---
 
-def search_youtube_videos(query: str, max_results: int = 5, region_code: Optional[str] = None) -> str:
+def search_youtube_videos(query: str, max_results: int = 5, region_code: Optional[str] = None, channel_handle: Optional[str] = None) -> str:
     """
     Searches YouTube for videos with closed captions based on a query, optionally
-    biasing results for a specific country.
+    biasing results for a specific country. Can be limited to a specific channel.
 
     Args:
-        query (str): The search term (e.g., "Supreme Court hearings").
-        max_results (int): The maximum number of video results to return.
-        region_code (str): An ISO 3166-1 alpha-2 country code (e.g., 'IN' for India, 'US' for USA).
+        query (str): The search term.
+        max_results (int): The maximum number of results to return.
+        region_code (Optional[str]): The ISO 3166-1 alpha-2 country code (e.g., IN, US).
+        channel_handle (Optional[str]): The handle of the YouTube channel to search within (e.g., "SupremeCourtofIndia-1950").
 
     Returns:
-        str: A JSON string containing a list of found videos with their metadata,
-             or an error message.
+        str: A JSON string containing a list of video details or an error.
     """
-    print(f"--- Tool: search_youtube_videos called for query: {query} ---")
-    api_key = os.environ.get("YOUTUBE_API_KEY")
-    if not api_key:
-        return json.dumps({"status": "error", "error_message": "YOUTUBE_API_KEY not set."})
-    
-    client = YouTubeAPIClient(api_key)
-    results = client.search_videos(query, max_results, region_code)
-    return json.dumps(results)
+    YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+    if not YOUTUBE_API_KEY:
+        return json.dumps({"error": "YOUTUBE_API_KEY is not set."})
+
+    client = YouTubeAPIClient(api_key=YOUTUBE_API_KEY)
+
+    channel_id = None
+    if channel_handle:
+        print(f"Resolving channel handle: '{channel_handle}'...", flush=True)
+        channel_id = client.get_channel_id(channel_handle)
+        if not channel_id:
+            return json.dumps({"error": f"Could not find a channel with handle '{channel_handle}'."})
+        print(f"Found channel ID: {channel_id}", flush=True)
+
+    try:
+        videos = client.search_videos(
+            query,
+            max_results=max_results,
+            region_code=region_code,
+            channel_id=channel_id
+        )
+        return json.dumps(videos, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"An error occurred during YouTube search: {e}"})
 
 
-def download_media_in_parallel(videos_json: str, download_target: str, language: str, output_dir: str = "./downloads", max_workers: int = 10) -> str:
+def download_media_in_parallel(videos_json: str, download_target: str, language: str, output_dir: str = "./downloads", max_workers: int = 5, cookies_file: Optional[str] = None) -> str:
     """
     Downloads video files and/or transcripts in parallel for a list of YouTube videos.
 
@@ -229,12 +297,14 @@ def download_media_in_parallel(videos_json: str, download_target: str, language:
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         if download_target in ['video', 'both']:
+            print("Submitting video download tasks...", flush=True)
             for video in videos:
-                futures.append(executor.submit(_download_video_worker, video, output_path))
+                futures.append(executor.submit(_download_video_worker, video, output_path, cookies_file))
         
         if download_target in ['transcript', 'both']:
+            print("Submitting transcript download tasks...", flush=True)
             for video in videos:
-                futures.append(executor.submit(_download_transcript_worker, video, language, output_path))
+                futures.append(executor.submit(_download_transcript_worker, video, language, output_path, cookies_file))
 
         for future in as_completed(futures):
             result = future.result()
@@ -246,7 +316,8 @@ def download_media_in_parallel(videos_json: str, download_target: str, language:
 
     return json.dumps(results, indent=2)
 
-def upload_files_to_gcs_in_parallel(local_files_json: str, bucket_name: str, gcs_prefix: str = "youtube_data", max_workers: int = 10) -> str:
+
+def upload_files_to_gcs_in_parallel(local_files_json: str, bucket_name: str, gcs_prefix: str = "youtube_data", max_workers: int = 5) -> str:
     """
     Uploads a list of local files to a Google Cloud Storage bucket in parallel.
 
@@ -259,7 +330,7 @@ def upload_files_to_gcs_in_parallel(local_files_json: str, bucket_name: str, gcs
     Returns:
         str: A JSON string summarizing the results of the upload operations.
     """
-    print(f"--- Tool: upload_files_to_gcs_in_parallel called for bucket: {bucket_name} ---")
+    print(f"--- Calling function upload_files_to_gcs_in_parallel for bucket: {bucket_name} ---")
     try:
         local_files = json.loads(local_files_json)
         if not isinstance(local_files, list):

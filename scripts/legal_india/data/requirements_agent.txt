@@ -1,0 +1,17 @@
+# Modern Agentic YouTube Data Downloader Requirements
+
+# Google ADK and Gemini
+google-adk>=0.1.0
+google-generativeai>=0.3.0
+
+# Core dependencies for YouTube tools
+yt-dlp>=2023.12.30
+google-api-python-client>=2.100.0
+google-cloud-storage>=2.0.0
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+
+# Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0

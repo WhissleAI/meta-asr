@@ -12,6 +12,7 @@ from glob import glob
 from huggingface_hub import snapshot_download
 import logging
 import io
+import hashlib
 import time as _time
 try:
     import psutil  # optional for detailed memory logging
@@ -370,6 +371,36 @@ def process_parquet_dataset(
         }
     No separate columns for demographics or intents; embedded inside the text fields as requested.
     """
+    # Optional: load previously processed keys to skip duplicates
+    resume_from_jsonl = os.getenv("RESUME_FROM_JSONL")
+    processed_keys: set[str] = set()
+    if resume_from_jsonl and os.path.exists(resume_from_jsonl):
+        def _basename(p: str | None) -> str:
+            return os.path.basename(p) if p else ""
+        loaded = 0
+        try:
+            with open(resume_from_jsonl, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    # Prefer explicit keys if present
+                    key = obj.get('source_index') or obj.get('source_key')
+                    if not key:
+                        # Fallback to audio basename if available
+                        key = _basename(obj.get('question_audio_path'))
+                    if not key:
+                        # Final fallback: hash of texts (may be noisy due to annotations/demographics)
+                        qt = obj.get('question_text', '')
+                        at = obj.get('answer_text', '')
+                        key = hashlib.sha1((qt + "|||" + at).encode('utf-8', errors='ignore')).hexdigest()
+                    processed_keys.add(str(key))
+                    loaded += 1
+            print(f"[resume-jsonl] Loaded {loaded} processed entries from {resume_from_jsonl}. Unique keys={len(processed_keys)}")
+        except Exception as e_rj:
+            print(f"[resume-jsonl] Failed to load {resume_from_jsonl}: {e_rj}")
+
     # Ensure output directory
     os.makedirs(os.path.dirname(output_jsonl_path), exist_ok=True)
     out_f = open(output_jsonl_path, 'w', encoding='utf-8')
@@ -408,6 +439,13 @@ def process_parquet_dataset(
 
     parquet_paths = sorted(glob(os.path.join(dataset_dir, 'data', 'train-*.parquet')))
     print(f"Found {len(parquet_paths)} parquet shards.")
+    # Best-effort: compute expected total rows from Parquet metadata for verification
+    total_expected_rows = None
+    try:
+        total_expected_rows = sum(pq.ParquetFile(p).metadata.num_rows for p in parquet_paths)
+        print(f"Expected total rows across shards (from metadata): {total_expected_rows}")
+    except Exception as e_meta:
+        print(f"[warn] Could not read parquet metadata for expected row count: {e_meta}")
     # Allow limiting shards for debugging via env
     max_shards_env = os.getenv('MAX_SHARDS')
     if max_shards_env:
@@ -445,6 +483,28 @@ def process_parquet_dataset(
         except Exception:
             return -1.0
 
+    skipped_due_to_resume = 0
+
+    def _compute_row_key(row: 'pa.Table | dict') -> str:
+        """Stable key for dedup: prefer source index, else audio basename, else text hash."""
+        try:
+            idx = row.get('index')
+            if idx is not None and str(idx) != 'nan':
+                return str(idx)
+        except Exception:
+            pass
+        # Try audio path from struct
+        qa_struct = row.get('question_audio') if hasattr(row, 'get') else None
+        audio_path = None
+        if isinstance(qa_struct, dict):
+            audio_path = qa_struct.get('path')
+        if audio_path:
+            return os.path.basename(str(audio_path))
+        # Last resort: hash of raw question+answer
+        q = str(row.get('question', '')).strip() if hasattr(row, 'get') else ''
+        a = str(row.get('answer', '')).strip() if hasattr(row, 'get') else ''
+        return hashlib.sha1((q + "|||" + a).encode('utf-8', errors='ignore')).hexdigest()
+
     for shard_idx, parquet_path in enumerate(parquet_paths):
         print(f"Reading shard {shard_idx+1}/{len(parquet_paths)}: {os.path.basename(parquet_path)}")
         try:
@@ -470,143 +530,160 @@ def process_parquet_dataset(
                     if processed == resume_skip:
                         print(f"[resume] Finished skipping {resume_skip} records. Resuming writes now.")
                     continue
-            question = str(row.get('question', '')).strip()
-            answer = str(row.get('answer', '')).strip()
-            qa_audio_struct = row.get('question_audio')
-            audio_path = None
-            signal = None
-            sr = 16000
-            duration = -1.0
-            age_group = 'UNK'
-            gender = 'UNK'
-            emotion = 'UNK'
-            if isinstance(qa_audio_struct, dict):
-                # huggingface datasets typical struct {"path": ..., "bytes": ...}
-                audio_path = qa_audio_struct.get('path')
-                # Normalize and attempt resolution strategy:
-                # 1) If relative and provided audio_subdir exists, join.
-                # 2) Else try inferred_audio_root.
-                # 3) Else if only a bare filename, join dataset_dir.
-                if audio_path and not os.path.isabs(audio_path):
-                    candidate_paths = []
-                    if audio_subdir:
-                        candidate_paths.append(os.path.join(audio_subdir, audio_path))
-                    candidate_paths.append(os.path.join(inferred_audio_root, audio_path))
-                    candidate_paths.append(os.path.join(dataset_dir, audio_path))
-                    # Deduplicate while preserving order
-                    seen = set(); ordered = []
-                    for cp in candidate_paths:
-                        if cp not in seen:
-                            ordered.append(cp); seen.add(cp)
-                    resolved = None
-                    for cp in ordered:
-                        if os.path.exists(cp):
-                            resolved = cp
-                            break
-                    if resolved:
-                        audio_path = resolved
-                # If the referenced path doesn't exist but we have bytes, decode directly
-                audio_bytes = qa_audio_struct.get('bytes') if isinstance(qa_audio_struct, dict) else None
-                if audio_path and os.path.exists(audio_path):
-                    duration = load_audio_duration(audio_path)
-                    try:
-                        signal, sr = librosa.load(audio_path, sr=16000, mono=True)
-                    except Exception as e_load:
-                        logger.warning(f"Primary audio load failed ({e_load}); trying soundfile")
+
+                # Compute stable row key and optionally skip if seen in prior JSONL
+                row_key = _compute_row_key(row)
+                if processed_keys and row_key in processed_keys:
+                    skipped_due_to_resume += 1
+                    processed += 1  # still advance counters for memory logs and limits
+                    if max_rows is not None and processed >= max_rows:
+                        break
+                    continue
+
+                # Extract fields for this row
+                question = str(row.get('question', '')).strip()
+                answer = str(row.get('answer', '')).strip()
+                qa_audio_struct = row.get('question_audio')
+                audio_path = None
+                signal = None
+                sr = 16000
+                duration = -1.0
+                age_group = 'UNK'
+                gender = 'UNK'
+                emotion = 'UNK'
+
+                if isinstance(qa_audio_struct, dict):
+                    # huggingface datasets typical struct {"path": ..., "bytes": ...}
+                    audio_path = qa_audio_struct.get('path')
+                    # Normalize and attempt resolution strategy:
+                    # 1) If relative and provided audio_subdir exists, join.
+                    # 2) Else try inferred_audio_root.
+                    # 3) Else if only a bare filename, join dataset_dir.
+                    if audio_path and not os.path.isabs(audio_path):
+                        candidate_paths = []
+                        if audio_subdir:
+                            candidate_paths.append(os.path.join(audio_subdir, audio_path))
+                        candidate_paths.append(os.path.join(inferred_audio_root, audio_path))
+                        candidate_paths.append(os.path.join(dataset_dir, audio_path))
+                        # Deduplicate while preserving order
+                        seen = set(); ordered = []
+                        for cp in candidate_paths:
+                            if cp not in seen:
+                                ordered.append(cp); seen.add(cp)
+                        resolved = None
+                        for cp in ordered:
+                            if os.path.exists(cp):
+                                resolved = cp
+                                break
+                        if resolved:
+                            audio_path = resolved
+                    # If the referenced path doesn't exist but we have bytes, decode directly
+                    audio_bytes = qa_audio_struct.get('bytes') if isinstance(qa_audio_struct, dict) else None
+                    if audio_path and os.path.exists(audio_path):
+                        duration = load_audio_duration(audio_path)
                         try:
-                            import soundfile as sf
-                            signal, sr = sf.read(audio_path)
-                            if sr != 16000:
-                                signal = librosa.resample(signal, orig_sr=sr, target_sr=16000)
-                                sr = 16000
-                            if signal.ndim > 1:
-                                signal = np.mean(signal, axis=1)
-                        except Exception as e_sf:
-                            logger.error(f"All audio load methods failed for {audio_path}: {e_sf}")
-                            signal = None
-                            sr = 16000
-                elif audio_bytes:
-                    # Decode bytes using soundfile->librosa fallback
-                    try:
-                        import soundfile as sf
-                        with io.BytesIO(audio_bytes) as bio:
-                            data, sr_read = sf.read(bio)
-                        if data.ndim > 1:
-                            data = np.mean(data, axis=1)
-                        # Resample if needed
-                        if sr_read != 16000:
-                            data = librosa.resample(data, orig_sr=sr_read, target_sr=16000)
-                            sr = 16000
-                        else:
-                            sr = sr_read
-                        signal = data.astype(np.float32)
-                        duration = round(len(signal) / sr, 2)
-                        # Optionally persist decoded bytes for reproducibility if we have a reference name
-                        if audio_path and not os.path.isabs(audio_path):
-                            # Save under inferred_audio_root
-                            os.makedirs(inferred_audio_root, exist_ok=True)
-                            target_file = os.path.join(inferred_audio_root, os.path.basename(audio_path))
+                            signal, sr = librosa.load(audio_path, sr=16000, mono=True)
+                        except Exception as e_load:
+                            logger.warning(f"Primary audio load failed ({e_load}); trying soundfile")
                             try:
                                 import soundfile as sf
-                                sf.write(target_file, signal, sr)
-                                audio_path = target_file
-                            except Exception as e_save:
-                                logger.warning(f"Failed to save decoded audio bytes to {target_file}: {e_save}")
-                    except Exception as e_bytes:
-                        logger.error(f"Failed to decode inline audio bytes: {e_bytes}")
-                        signal = None
-                else:
-                    # No path and no bytes
-                    duration = -1.0
+                                signal, sr = sf.read(audio_path)
+                                if sr != 16000:
+                                    signal = librosa.resample(signal, orig_sr=sr, target_sr=16000)
+                                    sr = 16000
+                                if signal.ndim > 1:
+                                    signal = np.mean(signal, axis=1)
+                            except Exception as e_sf:
+                                logger.error(f"All audio load methods failed for {audio_path}: {e_sf}")
+                                signal = None
+                                sr = 16000
+                    elif audio_bytes:
+                        # Decode bytes using soundfile->librosa fallback
+                        try:
+                            import soundfile as sf
+                            with io.BytesIO(audio_bytes) as bio:
+                                data, sr_read = sf.read(bio)
+                            if data.ndim > 1:
+                                data = np.mean(data, axis=1)
+                            # Resample if needed
+                            if sr_read != 16000:
+                                data = librosa.resample(data, orig_sr=sr_read, target_sr=16000)
+                                sr = 16000
+                            else:
+                                sr = sr_read
+                            signal = data.astype(np.float32)
+                            duration = round(len(signal) / sr, 2)
+                            # Optionally persist decoded bytes for reproducibility if we have a reference name
+                            if audio_path and not os.path.isabs(audio_path):
+                                # Save under inferred_audio_root
+                                os.makedirs(inferred_audio_root, exist_ok=True)
+                                target_file = os.path.join(inferred_audio_root, os.path.basename(audio_path))
+                                try:
+                                    import soundfile as sf
+                                    sf.write(target_file, signal, sr)
+                                    audio_path = target_file
+                                except Exception as e_save:
+                                    logger.warning(f"Failed to save decoded audio bytes to {target_file}: {e_save}")
+                        except Exception as e_bytes:
+                            logger.error(f"Failed to decode inline audio bytes: {e_bytes}")
+                            signal = None
+                    else:
+                        # No path and no bytes
+                        duration = -1.0
 
-                # Run inferences if we obtained a signal
-                if signal is not None and processor is not None and age_gender_model is not None:
-                    age_group, gender = safe_age_gender_predict(signal, sr, processor, age_gender_model)
-                if signal is not None and emotion_model_info:
-                    emotion = safe_emotion_predict(signal, sr, emotion_model_info)
+                    # Run inferences if we obtained a signal
+                    if signal is not None and processor is not None and age_gender_model is not None:
+                        age_group, gender = safe_age_gender_predict(signal, sr, processor, age_gender_model)
+                    if signal is not None and emotion_model_info:
+                        emotion = safe_emotion_predict(signal, sr, emotion_model_info)
 
-            record = {
-                "question_audio_path": os.path.abspath(audio_path) if audio_path else None,
-                "question_text": question,
-                "answer_text": answer,
-                "audio_duration_s": duration,
-                "age_group": age_group,
-                "gender": gender,
-                "emotion": emotion,
-            }
-            buffer.append(record)
-            processed += 1
+                record = {
+                    "question_audio_path": os.path.abspath(audio_path) if audio_path else None,
+                    "question_text": question,
+                    "answer_text": answer,
+                    "audio_duration_s": duration,
+                    "age_group": age_group,
+                    "gender": gender,
+                    "emotion": emotion,
+                    # Include keys to support future resumes/joins
+                    "source_index": str(row.get('index')) if row.get('index') is not None else None,
+                    "source_key": row_key,
+                }
+                buffer.append(record)
+                processed += 1
 
-            if len(buffer) >= batch_size:
-                annotated = annotate_batch_qa(buffer)
-                for rec in annotated:
-                    # Compose final annotated texts
-                    q_full = f"{rec['question_annotated']}  AGE_{rec['age_group']} GENDER_{rec['gender'].upper()} EMOTION_{rec['emotion'].upper()} {rec['question_intent']}".strip()
-                    a_full = f"{rec['answer_annotated']} {rec['answer_intent']}".strip()
-                    final_obj = {
-                        "question_audio_path": rec['question_audio_path'],
-                        "question_text": q_full,
-                        "answer_text": a_full,
-                        "audio_duration_s": rec['audio_duration_s']
-                    }
-                    out_f.write(json.dumps(final_obj, ensure_ascii=False) + '\n')
-                out_f.flush()
-                print(f"Wrote {processed} records so far.")
-                buffer = []
-                # Aggressive cleanup to mitigate memory growth
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                if len(buffer) >= batch_size:
+                    annotated = annotate_batch_qa(buffer)
+                    for rec in annotated:
+                        # Compose final annotated texts
+                        q_full = f"{rec['question_annotated']}  AGE_{rec['age_group']} GENDER_{rec['gender'].upper()} EMOTION_{rec['emotion'].upper()} {rec['question_intent']}".strip()
+                        a_full = f"{rec['answer_annotated']} {rec['answer_intent']}".strip()
+                        final_obj = {
+                            "question_audio_path": rec['question_audio_path'],
+                            "question_text": q_full,
+                            "answer_text": a_full,
+                            "audio_duration_s": rec['audio_duration_s'],
+                            "source_index": rec.get('source_index'),
+                            "source_key": rec.get('source_key'),
+                        }
+                        out_f.write(json.dumps(final_obj, ensure_ascii=False) + '\n')
+                    out_f.flush()
+                    print(f"Wrote {processed} records so far.")
+                    buffer = []
+                    # Aggressive cleanup to mitigate memory growth
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
-            # Periodic memory log
-            if processed - last_mem_log >= mem_log_interval:
-                rss = _rss_gb()
-                if rss >= 0:
-                    print(f"[mem] RSS={rss:.2f} GB after {processed} records (shard {shard_idx+1}).")
-                last_mem_log = processed
+                # Periodic memory log
+                if processed - last_mem_log >= mem_log_interval:
+                    rss = _rss_gb()
+                    if rss >= 0:
+                        print(f"[mem] RSS={rss:.2f} GB after {processed} records (shard {shard_idx+1}).")
+                    last_mem_log = processed
 
-            if max_rows is not None and processed >= max_rows:
-                break
+                if max_rows is not None and processed >= max_rows:
+                    break
 
             # End inner row loop
         # Explicitly drop DataFrame references
@@ -628,7 +705,9 @@ def process_parquet_dataset(
                 "question_audio_path": rec['question_audio_path'],
                 "question_text": q_full,
                 "answer_text": a_full,
-                "audio_duration_s": rec['audio_duration_s']
+                "audio_duration_s": rec['audio_duration_s'],
+                "source_index": rec.get('source_index'),
+                "source_key": rec.get('source_key'),
             }
             out_f.write(json.dumps(final_obj, ensure_ascii=False) + '\n')
         out_f.flush()
@@ -636,6 +715,12 @@ def process_parquet_dataset(
 
     out_f.close()
     print(f"✅ Completed. Total logical records processed: {processed} (resume_skip={resume_skip}).")
+    if total_expected_rows is not None:
+        delta = processed - total_expected_rows
+        status = "PASS" if processed == total_expected_rows else "MISMATCH"
+        print(f"Verification: processed={processed}, expected={total_expected_rows} -> {status} (delta={delta})")
+    if processed_keys:
+        print(f"[resume-jsonl] Skipped {skipped_due_to_resume} rows that already existed in {resume_from_jsonl}.")
     if resume_skip > 0:
         print(f"✅ Newly written records this run: {processed - resume_skip}")
 

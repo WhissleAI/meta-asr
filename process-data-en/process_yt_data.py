@@ -1229,11 +1229,11 @@ if __name__ == "__main__":
         download_dir = sys.argv[1]
     else:
         download_dir = "/external4/datasets/legal_data/youtube_data/_Bo05lJfCv4-SPL._REF._NO._12025_-_Constitution_Bench"
-    output_dir = download_dir  # save results alongside unless overridden
+    output_dir = download_dir  # default: save results alongside each media
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"Processing files from: {download_dir}")
-    print(f"Saving output to: {output_dir}")
+    print(f"Processing root: {download_dir}")
+    print(f"Outputs saved alongside each media folder")
 
     audio_extensions = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg', '.webm', '.mkv']
 
@@ -1264,17 +1264,50 @@ if __name__ == "__main__":
                 return c
         return None
 
-    # Strategy: process each media file and attempt to locate any matching VTT variant
-    for filename in sorted(os.listdir(download_dir)):
-        audio_path = os.path.join(download_dir, filename)
-        if not (os.path.isfile(audio_path) and any(filename.lower().endswith(ext) for ext in audio_extensions)):
-            continue
+    # Determine if given path contains subdirectories; if yes, process each subfolder.
+    entries = sorted(os.listdir(download_dir))
+    subdirs = [d for d in entries if os.path.isdir(os.path.join(download_dir, d))]
+
+    def process_folder(folder_path: str):
+        # Find first media file in this folder
+        media_files = [f for f in sorted(os.listdir(folder_path))
+                       if os.path.isfile(os.path.join(folder_path, f)) and any(f.lower().endswith(ext) for ext in audio_extensions)]
+        if not media_files:
+            print(f"[skip] No media found in: {folder_path}")
+            return
+        # Prefer mp4 if present
+        preferred = None
+        for f in media_files:
+            if f.lower().endswith('.mp4'):
+                preferred = f
+                break
+        filename = preferred or media_files[0]
+        audio_path = os.path.join(folder_path, filename)
         candidate_vtt = find_matching_vtt(audio_path)
-        print(f"\nProcessing audio file: {filename}")
+        print(f"\nProcessing folder: {os.path.basename(folder_path)}")
+        print(f"Audio: {audio_path}")
         if candidate_vtt:
-            print(f"Found VTT: {candidate_vtt}")
+            print(f"VTT: {candidate_vtt}")
         else:
-            print("No matching VTT found; proceeding without external transcript.")
-        df, _ = process_large_audio(audio_path, output_base_dir=output_dir, vtt_path=candidate_vtt)
-        print(f"Successfully processed {filename}. Segments: {len(df)}")
-        print("Output JSON saved alongside in results directory.")
+            print("VTT: (not found) — continuing without external transcript")
+        df, _ = process_large_audio(audio_path, output_base_dir=folder_path, vtt_path=candidate_vtt)
+        print(f"Processed: {filename}. Segments: {len(df)}")
+
+    if subdirs:
+        for d in subdirs:
+            process_folder(os.path.join(download_dir, d))
+    else:
+        # Fallback: original single-directory behavior
+        for filename in entries:
+            audio_path = os.path.join(download_dir, filename)
+            if not (os.path.isfile(audio_path) and any(filename.lower().endswith(ext) for ext in audio_extensions)):
+                continue
+            candidate_vtt = find_matching_vtt(audio_path)
+            print(f"\nProcessing audio file: {filename}")
+            if candidate_vtt:
+                print(f"Found VTT: {candidate_vtt}")
+            else:
+                print("No matching VTT found; proceeding without external transcript.")
+            df, _ = process_large_audio(audio_path, output_base_dir=output_dir, vtt_path=candidate_vtt)
+            print(f"Successfully processed {filename}. Segments: {len(df)}")
+            print("Output JSON saved alongside in results directory.")

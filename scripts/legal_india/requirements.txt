@@ -1,0 +1,13 @@
+# YouTube Search and Download Dependencies
+youtube-search-python>=1.6.6
+yt-dlp>=2023.12.30
+google-cloud-storage>=2.10.0
+
+# Alternative search library
+pytube>=15.0.0
+
+# Optional dependencies for video processing
+ffmpeg-python>=0.2.0
+
+# For OpenAI integration (if using query generation)
+openai>=1.0.0

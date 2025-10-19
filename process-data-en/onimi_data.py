@@ -357,7 +357,8 @@ def process_parquet_dataset(
     audio_subdir: str = None,
     batch_size: int = 25,
     max_rows: int | None = None,
-    resume_skip: int = 0
+    resume_skip: int = 0,
+    reference_jsonl_path: str | None = None,
 ):
     """Iterate over VoiceAssistant-400K parquet shards and annotate QA.
     Input parquet expected columns: 'question', 'question_audio', 'answer'.
@@ -400,6 +401,44 @@ def process_parquet_dataset(
             print(f"[resume-jsonl] Loaded {loaded} processed entries from {resume_from_jsonl}. Unique keys={len(processed_keys)}")
         except Exception as e_rj:
             print(f"[resume-jsonl] Failed to load {resume_from_jsonl}: {e_rj}")
+
+    # Reference JSONL: build a skip set using question_audio_path (absolute/real paths)
+    reference_audio_paths_abs: set[str] = set()
+    reference_audio_basenames: set[str] = set()
+    # Allow env override or explicit parameter
+    if reference_jsonl_path is None:
+        reference_jsonl_path = os.getenv("REFERENCE_JSONL")
+        # Default to the provided path if present on disk
+        if not reference_jsonl_path:
+            default_ref = "/external3/databases/hf-omini-data/merge_data.jsonl"
+            if os.path.exists(default_ref):
+                reference_jsonl_path = default_ref
+    if reference_jsonl_path and os.path.exists(reference_jsonl_path):
+        try:
+            seen = 0
+            with open(reference_jsonl_path, 'r', encoding='utf-8') as rf:
+                for line in rf:
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    # Prefer 'question_audio_path', but accept 'audio_path' as a fallback
+                    ap = obj.get('question_audio_path') or obj.get('audio_path') or obj.get('path')
+                    if not ap:
+                        continue
+                    # Normalize to absolute real path for robust comparison
+                    try:
+                        ap_abs = os.path.realpath(os.path.abspath(ap))
+                        reference_audio_paths_abs.add(ap_abs)
+                        reference_audio_basenames.add(os.path.basename(ap_abs))
+                        seen += 1
+                    except Exception:
+                        continue
+            print(f"[reference-jsonl] Loaded {seen} audio paths from {reference_jsonl_path}. Unique abs={len(reference_audio_paths_abs)}")
+        except Exception as e_ref:
+            print(f"[reference-jsonl] Failed reading {reference_jsonl_path}: {e_ref}")
+    elif reference_jsonl_path:
+        print(f"[reference-jsonl] Provided reference JSONL not found: {reference_jsonl_path}")
 
     # Ensure output directory
     os.makedirs(os.path.dirname(output_jsonl_path), exist_ok=True)
@@ -484,6 +523,7 @@ def process_parquet_dataset(
             return -1.0
 
     skipped_due_to_resume = 0
+    skipped_due_to_reference = 0
 
     def _compute_row_key(row: 'pa.Table | dict') -> str:
         """Stable key for dedup: prefer source index, else audio basename, else text hash."""
@@ -631,6 +671,27 @@ def process_parquet_dataset(
                         # No path and no bytes
                         duration = -1.0
 
+                    # Skip if audio path is already processed per reference JSONL (path or basename)
+                    if audio_path:
+                        try:
+                            ap_abs = os.path.realpath(os.path.abspath(audio_path))
+                        except Exception:
+                            ap_abs = os.path.abspath(audio_path)
+                        ap_base = os.path.basename(ap_abs)
+                        if ap_abs in reference_audio_paths_abs or ap_base in reference_audio_basenames:
+                            skipped_due_to_reference += 1
+                            processed += 1
+                            # Memory and progress logging cadence
+                            if processed - last_mem_log >= mem_log_interval:
+                                rss = _rss_gb()
+                                if rss >= 0:
+                                    print(f"[mem] RSS={rss:.2f} GB after {processed} records (shard {shard_idx+1}).")
+                                last_mem_log = processed
+                            # Respect max_rows constraint when skipping as well
+                            if max_rows is not None and processed >= max_rows:
+                                break
+                            continue
+
                     # Run inferences if we obtained a signal
                     if signal is not None and processor is not None and age_gender_model is not None:
                         age_group, gender = safe_age_gender_predict(signal, sr, processor, age_gender_model)
@@ -721,6 +782,8 @@ def process_parquet_dataset(
         print(f"Verification: processed={processed}, expected={total_expected_rows} -> {status} (delta={delta})")
     if processed_keys:
         print(f"[resume-jsonl] Skipped {skipped_due_to_resume} rows that already existed in {resume_from_jsonl}.")
+    if reference_audio_paths_abs or reference_audio_basenames:
+        print(f"[reference-jsonl] Skipped {skipped_due_to_reference} rows due to existing audio paths in {reference_jsonl_path}.")
     if resume_skip > 0:
         print(f"✅ Newly written records this run: {processed - resume_skip}")
 
@@ -729,6 +792,12 @@ def process_parquet_dataset(
 # !!! IMPORTANT: Update these paths to your specific directories !!!
 VOICE_ASSISTANT_DIR = os.getenv("VOICE_ASSISTANT_DIR", "/external3/databases/hf-omini-data/VoiceAssistant-400K")
 OUTPUT_JSONL_BASE = os.getenv("OUTPUT_JSONL", "/external3/databases/hf-omini-data/voiceassistant_annotated_2.jsonl")
+# Optional: reference JSONL to skip already processed audio paths
+REFERENCE_JSONL_PATH = os.getenv("REFERENCE_JSONL")
+if not REFERENCE_JSONL_PATH:
+    default_ref = "/external3/databases/hf-omini-data/merge_data.jsonl"
+    if os.path.exists(default_ref):
+        REFERENCE_JSONL_PATH = default_ref
 RESUME_SKIP_ENV = os.getenv("RESUME_SKIP", "0")
 try:
     RESUME_SKIP = int(RESUME_SKIP_ENV)
@@ -759,7 +828,8 @@ if __name__ == "__main__":
             audio_subdir=os.path.join(VOICE_ASSISTANT_DIR, 'data', 'audio'),
             batch_size=PROCESSING_BATCH_SIZE,
             max_rows=MAX_ROWS_DEBUG,
-            resume_skip=RESUME_SKIP
+            resume_skip=RESUME_SKIP,
+            reference_jsonl_path=REFERENCE_JSONL_PATH,
         )
     except Exception as e:
         print(f"FATAL ERROR: {e}")

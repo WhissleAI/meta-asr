@@ -1,12 +1,12 @@
 import os
 import json
 import torch
-import asyncio 
+import asyncio
 import librosa
 import numpy as np
 import pandas as pd
 import csv
-import moviepy as mp
+import moviepy as mp  # Corrected import alias
 import torch.nn as nn
 import soundfile as sf
 from pathlib import Path
@@ -41,7 +41,7 @@ if not hasattr(np, 'infty'):
 2. High quality Whisper (faster-whisper OR transformers) chunk-level transcription, then assigns words to speaker segments.
 3. Optional Gemini transcription per segment (gemini_text) if GEMINI_API_KEY / GOOGLE_API_KEY set.
 4. Optional Deepgram transcription per segment (deepgram_text) if DEEPGRAM_API_KEY set.
-5. Gemini-based entity + intent extraction tailored for animated content (characters, actions, SFX, etc.).
+5. Gemini-based entity + intent extraction tailored for kitchen environments (food items, cooking actions, utensils, etc.).
 6. Age / Gender / Emotion tagging per speaker segment.
 7. speaker_change_X tag added on first occurrence of a speaker in chronological order.
 8. Outputs:
@@ -344,7 +344,7 @@ class AudioSegment:
     intents: List[str] = field(default_factory=list)
 
 def extract_entities_and_intents(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Placeholder for gimnin entity+intent extraction. Return empty for now."""
+    """Placeholder for gemini entity+intent extraction. Return empty for now."""
     return [], []
 
 # ---------------- Whisper & Gemini Integration ---------------- #
@@ -419,29 +419,29 @@ def _transcribe_chunk_transformers(audio_path: str) -> List[Dict[str, Any]]:
     This properly utilizes GPU and provides chunk-level timestamps.
     """
     global _whisper_pipeline
-    
+
     try:
         # Create pipeline once and reuse
         if _whisper_pipeline is None:
             model_id = _whisper_model_name_env or "openai/whisper-large-v3"
-            
+
             force_cpu = os.getenv('FORCE_CPU', '0') == '1'
             device = 'cpu' if force_cpu or not torch.cuda.is_available() else 'cuda'
             torch_dtype = torch.float16 if device == 'cuda' else torch.float32
-            
+
             print(f"[whisper-transformers] Loading model '{model_id}' on {device}")
-            
+
             # Load model and processor
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
-                model_id, 
-                torch_dtype=torch_dtype, 
-                low_cpu_mem_usage=True, 
+                model_id,
+                torch_dtype=torch_dtype,
+                low_cpu_mem_usage=True,
                 use_safetensors=True
             )
             model.to(device)
-            
+
             processor = AutoProcessor.from_pretrained(model_id)
-            
+
             # Create pipeline - use transformers_pipeline to avoid conflict with pyannote
             # Use chunk_length_s to ensure proper timestamp generation
             _whisper_pipeline = transformers_pipeline(
@@ -454,34 +454,34 @@ def _transcribe_chunk_transformers(audio_path: str) -> List[Dict[str, Any]]:
                 chunk_length_s=30,  # Process in 30-second chunks for better timestamp accuracy
                 stride_length_s=5,   # 5-second overlap between chunks
             )
-        
+
         # Transcribe - use chunk-level timestamps (more reliable than word-level)
         # Setting return_timestamps=True gives us chunk-level timestamps
         result = _whisper_pipeline(
-            audio_path, 
+            audio_path,
             return_timestamps=True,
             generate_kwargs={
                 "task": "transcribe",
                 "language": "english",  # Adjust if needed
             }
         )
-        
+
         words: List[Dict[str, Any]] = []
-        
+
         # Extract chunk-level timestamps
         if 'chunks' in result and result['chunks']:
             for chunk in result['chunks']:
                 text = chunk.get('text', '').strip()
                 if not text:
                     continue
-                    
+
                 timestamp = chunk.get('timestamp', (0.0, 0.0))
                 if timestamp and len(timestamp) == 2:
                     start, end = timestamp
                     # Handle None values
                     start = float(start) if start is not None else 0.0
                     end = float(end) if end is not None else start + 1.0  # Fallback: 1 second duration
-                    
+
                     words.append({
                         'text': text,
                         'start': start,
@@ -501,14 +501,10 @@ def _transcribe_chunk_transformers(audio_path: str) -> List[Dict[str, Any]]:
                 'start': 0.0,
                 'end': 0.0
             })
-        
+
         return words
-        
+
     except Exception as e:
-        print(f"[whisper-transformers] Transcription failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
         print(f"[whisper-transformers] Transcription failed: {e}")
         import traceback
         traceback.print_exc()
@@ -598,7 +594,7 @@ def transcribe_chunk_whisper(audio_path: str) -> List[Dict[str, Any]]:
         return []
 
 _gemini_ready = False
-_gemini_model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')  # 1.5 flash deprecated -> use 2.0
+_gemini_model_name = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash-latest')
 _deepgram_ready = False
 
 def _init_deepgram():
@@ -676,15 +672,16 @@ def gemini_transcribe_segment(audio_path: str) -> str:
         model = genai.GenerativeModel(_gemini_model_name)
         with open(audio_path, 'rb') as f:
             audio_bytes = f.read()
-        # Prompt tailored for animated content and character dialogue
+        # Prompt tailored for kitchen content and dialogue
         prompt = (
-            "You are transcribing dialogue from animated content. "
+            "You are transcribing dialogue from a kitchen or cooking environment. "
+            "The audio may contain background noise like sizzling, chopping, or appliances running. "
             "Output a faithful, verbatim transcript in ENGLISH ONLY. "
-            "Preserve colloquial speech, interjections, and expressive sounds (e.g., uh, hmm, ah, gasp, laughter) as words; "
-            "do NOT describe them in brackets. Do not include speaker names, character labels, timestamps, or annotations. "
-            "Do not summarize or paraphrase; keep the original phrasing. "
-            "If the speech is in another language, return an English transliteration or natural translation inline, without brackets. "
-            "Return only the transcript text."
+            "Accurately capture cooking-specific terminology (e.g., 'julienne', 'sauté', 'deglaze'). "
+            "Preserve colloquial speech and interjections (e.g., uh, hmm, ah). "
+            "Do NOT describe sounds in brackets (e.g., [chopping], [sizzling]); transcribe speech only. "
+            "Do not include speaker names, timestamps, or other annotations. "
+            "Do not summarize. Return only the transcript text."
         )
         response = model.generate_content([
             {"mime_type": "audio/wav", "data": audio_bytes},
@@ -715,10 +712,10 @@ def gemini_transcribe_segment(audio_path: str) -> str:
         return ""
 
 def gemini_entities_intents(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Extract entities and intents for animated content using Gemini.
+    """Extract entities and intents for kitchen/cooking content using Gemini.
     Output contract:
-      - entities: list of {"text": str, "type": str} where type ∈ {CHARACTER, LOCATION, OBJECT, ACTION, EMOTION, SFX, CATCHPHRASE}
-      - intents: list of labels ∈ {QUESTION, COMMAND, REQUEST, EXCLAMATION, HUMOR, SARCASM, THREAT, APOLOGY, THANKS, GREETING, NARRATION, TRANSITION, AFFECTION, SURPRISE}
+      - entities: list of {"text": str, "type": str} where type ∈ {FOOD_ITEM, UTENSIL_TOOL, ACTION_COOKING, QUANTITY_MEASUREMENT, SOUND_KITCHEN, PERSON}
+      - intents: list of labels ∈ {INSTRUCTION, QUESTION, COMMENTARY_TIP, CONFIRMATION_FEEDBACK, GREETING_SOCIAL}
     Robust JSON recovery + debug logging retained.
     """
     if not text or not text.strip():
@@ -731,19 +728,23 @@ def gemini_entities_intents(text: str) -> Tuple[List[Dict[str, Any]], List[str]]
         model = genai.GenerativeModel(_gemini_model_name)
         truncated = text[:6000]  # safety limit
         prompt = (
-            "You are an NLP annotator for ANIMATED CONTENT (cartoons/anime).\n"
+            "You are an NLP annotator for KITCHEN/COOKING CONTENT.\n"
             "Given the transcript text, extract: \n"
-            "  - Entities with types from: CHARACTER, LOCATION, OBJECT, ACTION, EMOTION, SFX, CATCHPHRASE.\n"
-            "    • CHARACTER: names or clear references to specific characters (e.g., 'Tom', 'the wizard').\n"
-            "    • LOCATION: places or settings (e.g., 'castle', 'forest', 'school').\n"
-            "    • OBJECT: key items (e.g., 'magic wand', 'sword', 'remote').\n"
-            "    • ACTION: significant actions described or implied by the dialogue (verbs or short phrases).\n"
-            "    • EMOTION: explicit emotional states (e.g., 'angry', 'excited', 'scared').\n"
-            "    • SFX: notable sound effects mentioned as words (e.g., 'boom', 'whoosh', 'thud', 'laughter').\n"
-            "    • CATCHPHRASE: recurring, signature lines.\n"
-            "  - Intents from: QUESTION, COMMAND, REQUEST, EXCLAMATION, HUMOR, SARCASM, THREAT, APOLOGY, THANKS, GREETING, NARRATION, TRANSITION, AFFECTION, SURPRISE.\n"
+            "  - Entities with types from: FOOD_ITEM, UTENSIL_TOOL, ACTION_COOKING, QUANTITY_MEASUREMENT, SOUND_KITCHEN, PERSON.\n"
+            "    • FOOD_ITEM: Ingredients or prepared dishes (e.g., 'onions', 'chicken breast', 'pasta').\n"
+            "    • UTENSIL_TOOL: Kitchen tools, appliances, or cookware (e.g., 'knife', 'blender', 'pan', 'oven').\n"
+            "    • ACTION_COOKING: Verbs or short phrases describing a cooking process (e.g., 'chopping', 'sauté', 'bake for 10 minutes').\n"
+            "    • QUANTITY_MEASUREMENT: Specific amounts of ingredients (e.g., 'one cup', 'two tablespoons', 'a pinch').\n"
+            "    • SOUND_KITCHEN: Words describing a kitchen sound (e.g., 'sizzling', 'boiling', 'bubbling').\n"
+            "    • PERSON: Names or clear references to people (e.g., 'Chef Ramsey', 'my grandma', 'I', 'you').\n"
+            "  - Intents from: INSTRUCTION, QUESTION, COMMENTARY_TIP, CONFIRMATION_FEEDBACK, GREETING_SOCIAL.\n"
+            "    • INSTRUCTION: A command or step in a recipe (e.g., 'Next, chop the onions.').\n"
+            "    • QUESTION: Asking for information or clarification (e.g., 'How hot should the oven be?').\n"
+            "    • COMMENTARY_TIP: An observation, opinion, or helpful tip (e.g., 'This smells delicious.', 'Make sure to use a sharp knife.').\n"
+            "    • CONFIRMATION_FEEDBACK: Acknowledging an instruction or giving feedback (e.g., 'Okay, got it.', 'Yes, like that.').\n"
+            "    • GREETING_SOCIAL: Social pleasantries (e.g., 'Hello everyone!', 'Thanks for watching.').\n"
             "Return ONLY strict JSON: {\"entities\":[{\"text\":\"...\",\"type\":\"...\"}],\"intents\":[\"...\"]}.\n"
-            "Use empty arrays if nothing found.\n"
+            "Use empty arrays if nothing is found.\n"
             "Text: \"" + truncated.replace('"','\\"') + "\""
         )
         resp = model.generate_content(prompt)
@@ -1029,7 +1030,7 @@ def process_large_audio(
                             'emotion': emotion,
                             'audio_file_path': os.path.abspath(chunk_path)
                         }
-                        
+
                         all_data.append(segment_data)
 
                         chunk_data[chunk_filename].segments.append(segment)
@@ -1146,6 +1147,8 @@ def process_large_audio(
 
     except Exception as e:
         print(f"Error processing audio file {audio_path}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return [], []
 
 
@@ -1157,42 +1160,31 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         download_dir = sys.argv[1]
     else:
-        download_dir = "/external4/datasets/strem2action-audio/animated_characters"
+        download_dir = "/external4/datasets/strem2action-audio/kitchen"
     output_dir = download_dir  # default: save results alongside each media
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Processing root: {download_dir}")
     print(f"Outputs saved alongside each media folder")
 
-    # As requested, focus on MP4 files present in the directory
-    target_extension = '.wav'
+    # Define target extensions for kitchen-related media files
+    TARGET_EXTENSIONS = {'.wav', '.mp3', '.mp4', '.m4a', '.flac', '.ogg', '.webm', '.mkv'}
 
-    # No VTT matching is attempted; processing is ASR-only.
-
-    # Recursively find all .mp4 files within the given directory
-    mp4_files: List[str] = []
+    # Recursively find all target media files within the given directory
+    media_files: List[str] = []
     for dirpath, _, filenames in os.walk(download_dir):
         for fn in sorted(filenames):
-            if fn.lower().endswith(target_extension):
-                mp4_files.append(os.path.join(dirpath, fn))
+            if os.path.splitext(fn)[1].lower() in TARGET_EXTENSIONS:
+                media_files.append(os.path.join(dirpath, fn))
 
-    if not mp4_files:
-        print("[warn] No .mp4 files found recursively. Falling back to flat scan for common audio/video extensions.")
-        entries = sorted(os.listdir(download_dir))
-        fallback_exts = ['.mp3', '.wav', '.mp4', '.m4a', '.flac', '.ogg', '.webm', '.mkv']
-        for filename in entries:
-            audio_path = os.path.join(download_dir, filename)
-            if os.path.isfile(audio_path) and any(filename.lower().endswith(ext) for ext in fallback_exts):
-                mp4_files.append(audio_path)
-
-    if not mp4_files:
-        print("[exit] No media files found to process.")
+    if not media_files:
+        print(f"[exit] No media files with extensions {TARGET_EXTENSIONS} found in '{download_dir}'.")
         sys.exit(0)
 
-    total = len(mp4_files)
+    total = len(media_files)
     print(f"Discovered {total} media files to process.")
 
-    for idx, audio_path in enumerate(mp4_files, start=1):
+    for idx, audio_path in enumerate(media_files, start=1):
         parent_dir = os.path.dirname(audio_path)
         filename = os.path.basename(audio_path)
         print(f"\n[{idx}/{total}] Processing audio file: {filename}")

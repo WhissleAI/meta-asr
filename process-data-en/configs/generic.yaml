@@ -1,0 +1,99 @@
+# Generic/General Purpose Configuration
+# For general audio processing without domain-specific entity extraction
+
+domain:
+  name: "generic"
+  description: "General-purpose audio processing for any domain"
+
+models:
+  age_gender: "audeering/wav2vec2-large-robust-6-ft-age-gender"
+  whisper: "openai/whisper-large-v3"
+  gemini: "gemini-2.0-flash"
+  deepgram: "nova-2-general"
+
+features:
+  diarization: true
+  entity_intent_extraction: false  # Disabled for generic processing
+  structured_summary: false
+  gemini_transcription: false  # Use Whisper only
+  deepgram_transcription: false
+
+processing:
+  chunk_duration: 30.0
+  overlap_duration: 10.0
+  min_speakers: 1
+  max_speakers: null
+
+language: "english"
+
+input:
+  directory: "."
+  extensions: [".wav", ".mp3", ".mp4", ".webm", ".m4a", ".flac"]
+
+output:
+  directory: "./output"
+  per_file_subdirs: true
+
+prompts:
+  gemini_transcription: |
+    Transcribe this audio to English text accurately.
+    Output only the transcript without any formatting.
+
+  gemini_entities_intents: |
+    Extract any named entities and general intents from the text.
+    
+    Entities to extract:
+    - PERSON: Person names
+    - ORGANIZATION: Company or organization names
+    - LOCATION: Place names
+    - DATE: Date references
+    - TIME: Time references
+    - PRODUCT: Product names
+    - EVENT: Event names
+    
+    Intents to identify:
+    - QUESTION: Asking a question
+    - STATEMENT: Making a statement
+    - REQUEST: Requesting something
+    - INSTRUCTION: Giving instructions
+    - GREETING: Greeting or farewell
+    
+    Return JSON format:
+    {
+      "entities": [
+        {"text": "entity text", "type": "ENTITY_TYPE"},
+        ...
+      ],
+      "intents": ["INTENT_1", "INTENT_2", ...]
+    }
+    
+    Text:
+
+  gemini_structured: |
+    Summarize the key points from this conversation.
+    
+    Return JSON:
+    {
+      "summary": "brief summary of content",
+      "key_topics": ["list of main topics"],
+      "participants": ["people involved if mentioned"],
+      "sentiment": "positive|neutral|negative"
+    }
+    
+    Text:
+
+entity_types:
+  - "PERSON"
+  - "ORGANIZATION"
+  - "LOCATION"
+  - "DATE"
+  - "TIME"
+  - "PRODUCT"
+  - "EVENT"
+
+intent_categories:
+  - "QUESTION"
+  - "STATEMENT"
+  - "REQUEST"
+  - "INSTRUCTION"
+  - "GREETING"

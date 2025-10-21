@@ -1,0 +1,135 @@
+# Wellness & Health Domain Configuration
+# For processing wellness, health, fitness, mental health, and nutrition content
+
+domain:
+  name: "wellness_health"
+  description: "Processing wellness, health, fitness, mental health, and nutrition audio content"
+
+models:
+  age_gender: "audeering/wav2vec2-large-robust-6-ft-age-gender"
+  whisper: "openai/whisper-large-v3"
+  gemini: "gemini-2.0-flash"
+  deepgram: "nova-2-general"
+
+features:
+  diarization: true
+  entity_intent_extraction: true
+  structured_summary: true
+  gemini_transcription: false  # Use Whisper as primary
+  deepgram_transcription: false
+
+processing:
+  chunk_duration: 30.0  # seconds
+  overlap_duration: 10.0  # seconds
+  min_speakers: 1  # Often single speaker (presentations, talks)
+  max_speakers: 4  # Up to 4 for panel discussions
+
+language: "english"
+
+input:
+  directory: "/external4/datasets/strem2action-audio/wellness"
+  extensions: [".wav", ".mp3", ".mp4", ".webm"]
+
+output:
+  directory: "/external4/datasets/strem2action-audio/wellness/output"
+  per_file_subdirs: false  # Centralized output for this dataset
+
+prompts:
+  gemini_transcription: |
+    Transcribe this wellness and health audio to English text accurately.
+    Pay special attention to medical terminology, wellness practices, mental health concepts, and health advice.
+    Output only the transcript without any formatting or extra text.
+
+  gemini_entities_intents: |
+    Extract wellness and health-related entities and intents from the following text.
+    
+    Entities to extract (with type labels):
+    - HEALTH_CONDITION: Medical conditions, diseases, disorders, symptoms
+    - WELLNESS_PRACTICE: Wellness activities, exercises, practices (yoga, meditation, mindfulness, etc.)
+    - MENTAL_HEALTH_TOPIC: Mental health concepts (anxiety, depression, stress, resilience, etc.)
+    - NUTRITION_ITEM: Foods, nutrients, supplements, dietary items
+    - BODY_PART: Body parts, organs, systems mentioned
+    - MEASUREMENT: Health metrics (BMI, heart rate, blood pressure, weight, etc.)
+    - MEDICATION: Medicines, drugs, treatments mentioned
+    - PROFESSIONAL: Healthcare professionals, wellness coaches, therapists
+    - ORGANIZATION: Healthcare facilities, wellness centers, companies
+    - LIFESTYLE_FACTOR: Sleep, exercise, diet, stress management topics
+    - RESEARCH_FINDING: Scientific studies, research results mentioned
+    - WELLNESS_GOAL: Health goals, targets, objectives
+    
+    Intents to identify:
+    - HEALTH_ADVICE: Providing health or wellness advice
+    - SYMPTOM_DISCUSSION: Discussing symptoms or health issues
+    - TREATMENT_RECOMMENDATION: Recommending treatments or interventions
+    - PREVENTION_GUIDANCE: Preventive health measures
+    - MOTIVATION_ENCOURAGEMENT: Motivating or encouraging healthy behavior
+    - EDUCATION_INFORMATION: Educational content about health topics
+    - PERSONAL_STORY: Sharing personal health/wellness journey
+    - RESEARCH_PRESENTATION: Presenting research or scientific findings
+    - NUTRITION_ADVICE: Dietary and nutrition guidance
+    - MENTAL_HEALTH_SUPPORT: Mental health support and coping strategies
+    - FITNESS_INSTRUCTION: Exercise or fitness guidance
+    - WELLNESS_ASSESSMENT: Evaluating wellness status
+    
+    Return JSON format:
+    {
+      "entities": [
+        {"text": "entity text", "type": "ENTITY_TYPE"},
+        ...
+      ],
+      "intents": ["INTENT_1", "INTENT_2", ...]
+    }
+    
+    Text to analyze:
+
+  gemini_structured: |
+    Extract structured wellness and health information from this conversation.
+    
+    Return JSON with these fields (include only if present):
+    {
+      "main_topic": "primary wellness/health topic discussed",
+      "health_conditions_mentioned": ["list of conditions/diseases"],
+      "wellness_practices_discussed": ["list of wellness activities"],
+      "mental_health_topics": ["list of mental health concepts"],
+      "nutrition_advice": ["list of dietary recommendations"],
+      "lifestyle_recommendations": ["list of lifestyle changes suggested"],
+      "symptoms_discussed": ["list of symptoms mentioned"],
+      "treatments_mentioned": ["list of treatments/interventions"],
+      "research_cited": ["research or studies referenced"],
+      "key_takeaways": ["main lessons or advice"],
+      "target_audience": "who this content is for",
+      "expertise_level": "beginner|intermediate|advanced|professional",
+      "tone": "educational|motivational|clinical|conversational|scientific",
+      "actionable_steps": ["specific actions recommended"],
+      "warnings_cautions": ["any warnings or cautions mentioned"]
+    }
+    
+    Wellness/Health content:
+
+entity_types:
+  - "HEALTH_CONDITION"
+  - "WELLNESS_PRACTICE"
+  - "MENTAL_HEALTH_TOPIC"
+  - "NUTRITION_ITEM"
+  - "BODY_PART"
+  - "MEASUREMENT"
+  - "MEDICATION"
+  - "PROFESSIONAL"
+  - "ORGANIZATION"
+  - "LIFESTYLE_FACTOR"
+  - "RESEARCH_FINDING"
+  - "WELLNESS_GOAL"
+
+intent_categories:
+  - "HEALTH_ADVICE"
+  - "SYMPTOM_DISCUSSION"
+  - "TREATMENT_RECOMMENDATION"
+  - "PREVENTION_GUIDANCE"
+  - "MOTIVATION_ENCOURAGEMENT"
+  - "EDUCATION_INFORMATION"
+  - "PERSONAL_STORY"
+  - "RESEARCH_PRESENTATION"
+  - "NUTRITION_ADVICE"
+  - "MENTAL_HEALTH_SUPPORT"
+  - "FITNESS_INSTRUCTION"
+  - "WELLNESS_ASSESSMENT"

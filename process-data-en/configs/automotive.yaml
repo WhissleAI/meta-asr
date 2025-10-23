@@ -1,0 +1,110 @@
+# Automotive/Creative Design Domain Configuration
+# For processing vehicle-related content, design conversations, automotive videos
+
+domain:
+  name: "automotive_creative_design"
+  description: "Processing automotive and creative design content"
+
+models:
+  age_gender: "audeering/wav2vec2-large-robust-6-ft-age-gender"
+  whisper: "openai/whisper-large-v3"
+  gemini: "gemini-2.0-flash"
+  deepgram: "nova-2-general"
+
+features:
+  diarization: true
+  entity_intent_extraction: true
+  structured_summary: true
+  gemini_transcription: false  # Use Whisper as primary
+  deepgram_transcription: false
+
+processing:
+  chunk_duration: 30.0  # seconds
+  overlap_duration: 10.0  # seconds
+  min_speakers: 2
+  max_speakers: null  # auto-detect
+
+language: "english"
+
+input:
+  directory: "."
+  extensions: [".wav", ".mp3", ".mp4", ".webm"]
+
+output:
+  directory: "./output"
+  per_file_subdirs: true  # Create subdirs per file in same location
+
+prompts:
+  gemini_transcription: |
+    Transcribe this audio to English text accurately. 
+    Focus on automotive and design terminology.
+    Output only the transcript without any formatting or extra text.
+
+  gemini_entities_intents: |
+    Extract automotive and design-related entities and user intents from the following text.
+    
+    Entities to extract (with type labels):
+    - VEHICLE: Any vehicle name, make, model, or type
+    - VEHICLE_PART: Any vehicle component or part (engine, tire, battery, etc.)
+    - FEATURE: Vehicle features or technologies
+    - DESIGN_ELEMENT: Visual or aesthetic design elements
+    - COLOR: Color names
+    - MATERIAL: Materials mentioned
+    - BRAND: Brand or manufacturer names
+    - LOCATION: Places or locations mentioned
+    
+    Intents to identify:
+    - PURCHASE_INQUIRY: Questions about buying or pricing
+    - COMPARISON: Comparing vehicles or features
+    - TECHNICAL_QUESTION: Questions about how things work
+    - PROBLEM_REPORT: Reporting issues or problems
+    - DESIGN_FEEDBACK: Comments about design or aesthetics
+    - FEATURE_REQUEST: Requesting specific features
+    - MAINTENANCE_QUERY: Questions about service or maintenance
+    
+    Return JSON format:
+    {
+      "entities": [
+        {"text": "entity text", "type": "ENTITY_TYPE"},
+        ...
+      ],
+      "intents": ["INTENT_1", "INTENT_2", ...]
+    }
+    
+    Text to analyze:
+
+  gemini_structured: |
+    Extract structured information from this automotive/design conversation.
+    
+    Return JSON with these fields (include only if present):
+    {
+      "vehicle_mentioned": ["list of vehicles"],
+      "parts_discussed": ["list of parts"],
+      "features_of_interest": ["list of features"],
+      "design_elements": ["list of design aspects"],
+      "customer_concerns": ["list of concerns or questions"],
+      "suggested_actions": ["list of recommended actions"],
+      "sentiment": "positive|neutral|negative",
+      "urgency": "low|medium|high"
+    }
+    
+    Conversation text:
+
+entity_types:
+  - "VEHICLE"
+  - "VEHICLE_PART"
+  - "FEATURE"
+  - "DESIGN_ELEMENT"
+  - "COLOR"
+  - "MATERIAL"
+  - "BRAND"
+  - "LOCATION"
+
+intent_categories:
+  - "PURCHASE_INQUIRY"
+  - "COMPARISON"
+  - "TECHNICAL_QUESTION"
+  - "PROBLEM_REPORT"
+  - "DESIGN_FEEDBACK"
+  - "FEATURE_REQUEST"
+  - "MAINTENANCE_QUERY"

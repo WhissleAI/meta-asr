@@ -1,0 +1,119 @@
+# Interview Domain Configuration
+# For processing professional interviews, hiring conversations, skill assessments
+
+domain:
+  name: "interview"
+  description: "Processing professional interview and recruitment content"
+
+models:
+  age_gender: "audeering/wav2vec2-large-robust-6-ft-age-gender"
+  whisper: "openai/whisper-large-v3"
+  gemini: "gemini-2.0-flash"
+  deepgram: "nova-2-general"
+
+features:
+  diarization: true
+  entity_intent_extraction: true
+  structured_summary: true
+  gemini_transcription: false
+  deepgram_transcription: false
+
+processing:
+  chunk_duration: 30.0
+  overlap_duration: 10.0
+  min_speakers: 2
+  max_speakers: 3  # Typically interviewer + candidate (+ maybe second interviewer)
+
+language: "english"
+
+input:
+  directory: "."
+  extensions: [".wav", ".mp3", ".mp4"]
+
+output:
+  directory: "./output"
+  per_file_subdirs: true
+
+prompts:
+  gemini_transcription: |
+    Transcribe this interview audio accurately to English text.
+    Pay special attention to professional terminology, role titles, and skill names.
+    Output only the transcript.
+
+  gemini_entities_intents: |
+    Extract interview-related entities and intents from the following conversation.
+    
+    Entities to extract:
+    - PERSON: Names of people mentioned
+    - ROLE: Job titles or positions
+    - COMPANY: Company or organization names
+    - SKILL: Technical or soft skills mentioned
+    - TECHNOLOGY: Technologies, tools, frameworks, languages
+    - QUALIFICATION: Degrees, certifications, credentials
+    - PROJECT: Project names or descriptions
+    - EXPERIENCE_DURATION: Time periods (5 years, 3 months, etc.)
+    - LOCATION: Geographic locations or work locations
+    - QUESTION: Direct interview questions asked
+    
+    Intents to identify:
+    - SKILL_ASSESSMENT: Evaluating candidate's skills
+    - EXPERIENCE_INQUIRY: Questions about past experience
+    - BEHAVIORAL_QUESTION: Behavioral interview questions
+    - TECHNICAL_CHALLENGE: Technical problem-solving questions
+    - CULTURE_FIT: Questions about work style or values
+    - SALARY_DISCUSSION: Compensation-related topics
+    - AVAILABILITY_CHECK: Checking availability or timeline
+    - ROLE_CLARIFICATION: Explaining the role or responsibilities
+    
+    Return JSON format:
+    {
+      "entities": [
+        {"text": "entity text", "type": "ENTITY_TYPE"},
+        ...
+      ],
+      "intents": ["INTENT_1", "INTENT_2", ...]
+    }
+    
+    Interview text:
+
+  gemini_structured: |
+    Extract structured information from this interview conversation.
+    
+    Return JSON with these fields:
+    {
+      "candidate_name": "name if mentioned",
+      "role_applied_for": "job title",
+      "key_skills_discussed": ["list of skills"],
+      "technologies_mentioned": ["list of technologies"],
+      "experience_highlights": ["notable experiences"],
+      "questions_asked": ["list of questions"],
+      "candidate_responses_summary": ["key points from responses"],
+      "red_flags": ["concerning points if any"],
+      "positive_indicators": ["strengths demonstrated"],
+      "next_steps_mentioned": ["follow-up actions"],
+      "overall_tone": "positive|neutral|negative"
+    }
+    
+    Interview transcript:
+
+entity_types:
+  - "PERSON"
+  - "ROLE"
+  - "COMPANY"
+  - "SKILL"
+  - "TECHNOLOGY"
+  - "QUALIFICATION"
+  - "PROJECT"
+  - "EXPERIENCE_DURATION"
+  - "LOCATION"
+  - "QUESTION"
+
+intent_categories:
+  - "SKILL_ASSESSMENT"
+  - "EXPERIENCE_INQUIRY"
+  - "BEHAVIORAL_QUESTION"
+  - "TECHNICAL_CHALLENGE"
+  - "CULTURE_FIT"
+  - "SALARY_DISCUSSION"
+  - "AVAILABILITY_CHECK"
+  - "ROLE_CLARIFICATION"

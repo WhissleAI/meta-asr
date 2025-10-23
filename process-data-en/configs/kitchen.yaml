@@ -1,0 +1,122 @@
+# Kitchen/Cooking Domain Configuration
+# For processing cooking videos, kitchen conversations, recipe content
+
+domain:
+  name: "kitchen_cooking"
+  description: "Processing cooking and kitchen-related audio content"
+
+models:
+  age_gender: "audeering/wav2vec2-large-robust-6-ft-age-gender"
+  whisper: "openai/whisper-large-v3"
+  gemini: "gemini-2.0-flash"
+  deepgram: "nova-2-general"
+
+features:
+  diarization: true
+  entity_intent_extraction: true
+  structured_summary: true
+  gemini_transcription: false
+  deepgram_transcription: false
+
+processing:
+  chunk_duration: 30.0
+  overlap_duration: 10.0
+  min_speakers: 1  # Often single chef/host
+  max_speakers: 3
+
+language: "english"
+
+input:
+  directory: "."
+  extensions: [".wav", ".mp3", ".mp4", ".webm"]
+
+output:
+  directory: "./output"
+  per_file_subdirs: true
+
+prompts:
+  gemini_transcription: |
+    Transcribe this cooking/kitchen audio to English text.
+    Preserve ingredient names, cooking techniques, and measurements accurately.
+    Output only the transcript.
+
+  gemini_entities_intents: |
+    Extract cooking and kitchen-related entities and intents from the following text.
+    
+    Entities to extract:
+    - FOOD_ITEM: Ingredients, dishes, or food products
+    - UTENSIL_TOOL: Kitchen tools, appliances, or equipment
+    - ACTION_COOKING: Cooking actions/techniques (chop, sauté, bake, etc.)
+    - MEASUREMENT: Quantities and measurements (cups, grams, tablespoons, etc.)
+    - TEMPERATURE: Temperature specifications (350°F, medium heat, etc.)
+    - TIME_DURATION: Cooking durations (5 minutes, 2 hours, etc.)
+    - CUISINE_TYPE: Cuisine categories (Italian, Asian, Mediterranean, etc.)
+    - RECIPE_NAME: Names of dishes or recipes
+    - BRAND: Brand names of products
+    - LOCATION: Storage locations (fridge, pantry, oven, etc.)
+    
+    Intents to identify:
+    - RECIPE_INSTRUCTION: Providing recipe steps
+    - INGREDIENT_INQUIRY: Questions about ingredients
+    - TECHNIQUE_EXPLANATION: Explaining cooking techniques
+    - SUBSTITUTION_SUGGESTION: Suggesting ingredient substitutions
+    - TIMING_GUIDANCE: Providing cooking time guidance
+    - EQUIPMENT_RECOMMENDATION: Recommending tools or equipment
+    - STORAGE_ADVICE: Advice on storing food
+    - TROUBLESHOOTING: Solving cooking problems
+    - NUTRITIONAL_INFO: Discussing nutrition or health
+    
+    Return JSON format:
+    {
+      "entities": [
+        {"text": "entity text", "type": "ENTITY_TYPE"},
+        ...
+      ],
+      "intents": ["INTENT_1", "INTENT_2", ...]
+    }
+    
+    Cooking conversation:
+
+  gemini_structured: |
+    Extract structured cooking information from this conversation.
+    
+    Return JSON with these fields:
+    {
+      "recipe_name": "dish name if mentioned",
+      "cuisine_type": "cuisine category",
+      "ingredients": ["list of ingredients"],
+      "tools_needed": ["kitchen tools mentioned"],
+      "cooking_steps": ["sequential steps"],
+      "cooking_techniques": ["techniques used"],
+      "prep_time": "preparation time if mentioned",
+      "cook_time": "cooking time if mentioned",
+      "serving_size": "number of servings if mentioned",
+      "difficulty_level": "easy|medium|hard",
+      "tips_and_tricks": ["helpful tips mentioned"],
+      "common_mistakes": ["warnings or things to avoid"]
+    }
+    
+    Cooking content:
+
+entity_types:
+  - "FOOD_ITEM"
+  - "UTENSIL_TOOL"
+  - "ACTION_COOKING"
+  - "MEASUREMENT"
+  - "TEMPERATURE"
+  - "TIME_DURATION"
+  - "CUISINE_TYPE"
+  - "RECIPE_NAME"
+  - "BRAND"
+  - "LOCATION"
+
+intent_categories:
+  - "RECIPE_INSTRUCTION"
+  - "INGREDIENT_INQUIRY"
+  - "TECHNIQUE_EXPLANATION"
+  - "SUBSTITUTION_SUGGESTION"
+  - "TIMING_GUIDANCE"
+  - "EQUIPMENT_RECOMMENDATION"
+  - "STORAGE_ADVICE"
+  - "TROUBLESHOOTING"
+  - "NUTRITIONAL_INFO"

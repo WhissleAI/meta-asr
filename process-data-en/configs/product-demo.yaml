@@ -1,0 +1,132 @@
+# Product Demo & Sales Call Domain Configuration
+# For processing product demonstrations, sales pitches, and feature walkthroughs
+
+domain:
+  name: "product_demo"
+  description: "Processing product demonstrations, sales pitches, and feature walkthroughs"
+
+models:
+  age_gender: "audeering/wav2vec2-large-robust-6-ft-age-gender"
+  whisper: "openai/whisper-large-v3"
+  gemini: "gemini-2.0-flash"
+  deepgram: "nova-2-general"
+
+features:
+  diarization: true
+  entity_intent_extraction: true
+  structured_summary: true
+  gemini_transcription: false  # Use Whisper as primary
+  deepgram_transcription: false
+
+processing:
+  chunk_duration: 30.0  # seconds
+  overlap_duration: 10.0  # seconds
+  min_speakers: 1  # For single-presenter demos
+  max_speakers: 5  # For demos with a prospect team
+
+language: "english"
+
+input:
+  # IMPORTANT: Update this path to your product demo audio files
+  directory: "/path/to/your/product_demo_audio"
+  extensions: [".wav", ".mp3", ".mp4", ".webm"]
+
+output:
+  # IMPORTANT: Update this path for the processed output
+  directory: "/path/to/your/output_directory"
+  per_file_subdirs: false  # Centralized output
+
+prompts:
+  gemini_transcription: |
+    Transcribe this product demo or sales call to English text accurately.
+    Pay special attention to product names, technical features, pricing terms, competitor names, and customer-specific jargon.
+    Output only the transcript without any formatting or extra text.
+
+  gemini_entities_intents: |
+    Extract product and sales-related entities and intents from the following text.
+    
+    Entities to extract (with type labels):
+    - PRODUCT_NAME: The name of the product or service being discussed.
+    - FEATURE: A specific feature or capability of the product.
+    - PRICING: Any mention of cost, price, subscription, or licensing.
+    - COMPETITOR: A competing product or company mentioned.
+    - PAIN_POINT: A problem or challenge the customer is facing.
+    - VALUE_PROPOSITION: A benefit or advantage of the product.
+    - TECHNICAL_TERM: Technical jargon, acronyms, or specifications (e.g., API, SSO, SDK).
+    - ACTION_ITEM: A follow-up task or next step (e.g., "send the proposal", "schedule follow-up").
+    - QUESTION: A question asked by any participant.
+    - OBJECTION: A concern or reason for not buying raised by the prospect.
+    - INTEGRATION: Mention of integration with another system (e.g., Salesforce, Slack).
+    - USE_CASE: A specific example of how the product is used.
+    
+    Intents to identify:
+    - FEATURE_EXPLANATION: Describing how a feature works.
+    - PRICING_DISCUSSION: Talking about the cost of the product.
+    - ASKING_QUESTION: A user is asking a question for clarification.
+    - ANSWERING_QUESTION: The presenter is answering a direct question.
+    - ADDRESSING_PAIN_POINT: Directly speaking to a customer's problem.
+    - HIGHLIGHTING_BENEFIT: Emphasizing a positive outcome or value.
+    - COMPETITOR_COMPARISON: Comparing the product to a competitor.
+    - DEFINING_NEXT_STEPS: Outlining action items or follow-ups.
+    - OBJECTION_HANDLING: Responding to a customer's concern or objection.
+    - USE_CASE_PRESENTATION: Demonstrating a real-world application.
+    - BUILDING_RAPPORT: General non-business conversation or relationship building.
+    
+    Return JSON format:
+    {
+      "entities": [
+        {"text": "entity text", "type": "ENTITY_TYPE"},
+        ...
+      ],
+      "intents": ["INTENT_1", "INTENT_2", ...]
+    }
+    
+    Text to analyze:
+
+  gemini_structured: |
+    Extract a structured summary of this product demo or sales call.
+    
+    Return JSON with these fields (include only if present):
+    {
+      "main_topic": "A brief summary of the demo's primary focus",
+      "products_demonstrated": ["list of product names shown"],
+      "key_features_shown": ["list of specific features discussed or shown"],
+      "prospect_pain_points": ["list of challenges or problems the prospect mentioned"],
+      "value_propositions_communicated": ["list of key benefits highlighted by the presenter"],
+      "competitors_mentioned": ["list of any competing products or companies"],
+      "prospect_questions": ["summary or list of the most important questions asked by the prospect"],
+      "objections_raised": ["list of concerns or objections from the prospect"],
+      "pricing_discussion_summary": "a brief summary of any talk about cost, licensing, or price",
+      "action_items": ["list of concrete next steps for both sides"],
+      "overall_sentiment": "positive|neutral|negative|mixed",
+      "prospect_engagement_level": "high|medium|low"
+    }
+    
+    Product demo content:
+
+entity_types:
+  - "PRODUCT_NAME"
+  - "FEATURE"
+  - "PRICING"
+  - "COMPETITOR"
+  - "PAIN_POINT"
+  - "VALUE_PROPOSITION"
+  - "TECHNICAL_TERM"
+  - "ACTION_ITEM"
+  - "QUESTION"
+  - "OBJECTION"
+  - "INTEGRATION"
+  - "USE_CASE"
+
+intent_categories:
+  - "FEATURE_EXPLANATION"
+  - "PRICING_DISCUSSION"
+  - "ASKING_QUESTION"
+  - "ANSWERING_QUESTION"
+  - "ADDRESSING_PAIN_POINT"
+  - "HIGHLIGHTING_BENEFIT"
+  - "COMPETITOR_COMPARISON"
+  - "DEFINING_NEXT_STEPS"
+  - "OBJECTION_HANDLING"
+  - "USE_CASE_PRESENTATION"
+  - "BUILDING_RAPPORT"

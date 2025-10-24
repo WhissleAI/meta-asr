@@ -1,0 +1,150 @@
+# Scoorer Domain Configuration
+# For processing sports (match commentary, highlights, analysis) audio content
+
+domain:
+  name: "scoorer"
+  description: "Processing Scoorer sports audio: play-by-play, scoring events, match analysis, interviews, and news updates."
+
+models:
+  age_gender: "audeering/wav2vec2-large-robust-6-ft-age-gender"
+  whisper: "openai/whisper-large-v3"
+  gemini: "gemini-2.0-flash"
+  deepgram: "nova-2-general"
+
+features:
+  diarization: true
+  entity_intent_extraction: true
+  structured_summary: true
+  gemini_transcription: false  # Use Whisper as primary
+  deepgram_transcription: false
+
+processing:
+  chunk_duration: 30.0  # seconds
+  overlap_duration: 10.0  # seconds
+  min_speakers: 1
+  max_speakers: 6  # Panels/commentary teams can be larger than wellness talks
+
+language: "english"
+
+input:
+  directory: "/external4/datasets/strem2action-audio/soccer_data"
+  extensions: [".wav", ".mp3", ".mp4", ".webm"]
+
+output:
+  directory: "/external4/datasets/strem2action-audio/soccer_data/output"
+  per_file_subdirs: false  # Centralized output for this dataset
+
+prompts:
+  gemini_transcription: |
+    Transcribe this sports audio to English text accurately.
+    Capture team/player names, match events (goals, assists, fouls, cards, substitutions),
+    timing (minutes/periods), venues, and scoreline changes.
+    Output only the transcript without any formatting or extra text.
+
+  gemini_entities_intents: |
+    Extract Scoorer sports entities and intents from the following text.
+
+    Entities to extract (with type labels):
+    - TEAM: Club or national team names
+    - PLAYER: Player names
+    - POSITION: Player positions (striker, midfielder, GK, etc.)
+    - JERSEY_NUMBER: Player jersey numbers
+    - MATCH: Match identifiers (fixture names, derby names)
+    - COMPETITION: League or tournament (Premier League, LaLiga, UCL, etc.)
+    - STADIUM: Venue names
+    - LOCATION: City or country
+    - DATE_TIME: Match date/time mentions
+    - PERIOD: First half, second half, extra time, penalties
+    - TIME_MARKER: Minute markers like "23'", "90+2'"
+    - SCORELINE: Scores like "2-1", "nil-nil"
+    - EVENT: Specific events {goal, assist, shot, save, foul, offside, yellow_card, red_card, substitution, penalty_awarded, penalty_missed, injury, VAR_review, corner, free_kick, kickoff, full_time, half_time}
+    - REFEREE: Match officials
+    - TACTIC: Formations/strategies (4-3-3, high press, low block)
+    - STAT: Quantitative match stats (possession %, xG, shots, passes, tackles)
+    - INJURY: Injury mentions and status
+    - TRANSFER: Transfer/contract mentions
+    - QUOTE: Direct quotes from players/managers/referees
+    - MEDIA_SOURCE: Broadcaster or outlet names
+
+    Intents to identify:
+    - PLAY_BY_PLAY: Live or sequential description of events
+    - HIGHLIGHT_RECAP: Summary of key moments
+    - ANALYSIS_BREAKDOWN: Tactical/technical analysis
+    - INTERVIEW: Q&A or quotes from players/coaches
+    - NEWS_UPDATE: Transfers, injuries, suspensions, announcements
+    - PREDICTION_PREVIEW: Pre-match predictions, lineups, odds
+    - FAN_REACTION: Opinionated reactions or crowd sentiment
+    - STAT_FOCUS: Emphasis on statistics/metrics
+
+    Return JSON format:
+    {
+      "entities": [
+        {"text": "entity text", "type": "ENTITY_TYPE"},
+        ...
+      ],
+      "intents": ["INTENT_1", "INTENT_2", ...]
+    }
+
+    Text to analyze:
+
+  gemini_structured: |
+    Extract a structured summary of the match-related content.
+
+    Return JSON with these fields (include only if present):
+    {
+      "competition": "league/tournament",
+      "match": "fixture label or identifier",
+      "date_time": "ISO or natural-language time",
+      "venue": "stadium/location",
+      "teams": ["Team A", "Team B"],
+      "final_score": "A-B or 'TBD'",
+      "score_progression": [
+        {"minute": "45+1'", "team": "Team A", "event": "goal", "player": "Name", "scoreline": "1-0"}
+      ],
+      "key_events": [
+        {"minute": "11'", "type": "yellow_card", "player": "Name", "team": "Team B"},
+        {"minute": "67'", "type": "substitution", "out": "Name", "in": "Name", "team": "Team A"}
+      ],
+      "players_of_note": ["MVP or standout performers"],
+      "tactics": ["formations, strategic notes"],
+      "stats": {"possession_pct_A": 52, "possession_pct_B": 48, "xG_A": 1.8, "xG_B": 0.9, "...": "..."},
+      "injuries": ["player and status if any"],
+      "referee": "official name(s)",
+      "narrative_summary": "brief natural-language recap",
+      "takeaways": ["bullet key insights"],
+      "next_fixtures": ["upcoming matches if mentioned"]
+    }
+
+    Sports audio content:
+
+entity_types:
+  - "TEAM"
+  - "PLAYER"
+  - "POSITION"
+  - "JERSEY_NUMBER"
+  - "MATCH"
+  - "COMPETITION"
+  - "STADIUM"
+  - "LOCATION"
+  - "DATE_TIME"
+  - "PERIOD"
+  - "TIME_MARKER"
+  - "SCORELINE"
+  - "EVENT"
+  - "REFEREE"
+  - "TACTIC"
+  - "STAT"
+  - "INJURY"
+  - "TRANSFER"
+  - "QUOTE"
+  - "MEDIA_SOURCE"
+
+intent_categories:
+  - "PLAY_BY_PLAY"
+  - "HIGHLIGHT_RECAP"
+  - "ANALYSIS_BREAKDOWN"
+  - "INTERVIEW"
+  - "NEWS_UPDATE"
+  - "PREDICTION_PREVIEW"
+  - "FAN_REACTION"
+  - "STAT_FOCUS"

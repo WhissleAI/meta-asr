@@ -470,7 +470,7 @@ class ChunkData:
     duration_secs: float = 0.0
 
     def get_formatted_text(self, config: dict) -> str:
-        """Format segments with metadata tags."""
+        """Format segments with metadata tags including inline entities and intents."""
         texts: List[str] = []
         current_speaker = None
         last_text = None
@@ -482,11 +482,39 @@ class ChunkData:
             if current_speaker != segment.speaker:
                 metadata += " SPEAKER_CHANGE"
                 current_speaker = segment.speaker
-            raw = (segment.text or "").lower().strip()
-            if raw == last_text and raw != "":
+            
+            raw = (segment.text or "").strip()
+            if raw.lower() == last_text and raw != "":
                 continue
-            last_text = raw
-            combined = f"{raw} {metadata}".strip() if raw else metadata
+            last_text = raw.lower()
+            
+            # Insert entity tags inline with the text
+            tagged_text = raw
+            if segment.entities:
+                # Sort entities by length (longest first) to avoid partial replacements
+                sorted_entities = sorted(segment.entities, key=lambda e: len(e.get('text', '')), reverse=True)
+                for entity in sorted_entities:
+                    entity_text = entity.get('text', '').strip()
+                    entity_type = entity.get('type', 'UNKNOWN').upper().replace(' ', '_')
+                    if entity_text and entity_text in tagged_text:
+                        # Replace entity text with tagged version
+                        replacement = f"ENTITY_{entity_type} {entity_text} END"
+                        tagged_text = tagged_text.replace(entity_text, replacement, 1)
+            
+            # Add intent tags at the end
+            if segment.intents:
+                intent_tags = [f"INTENT_{intent.upper().replace(' ', '_')}" for intent in segment.intents]
+                if intent_tags:
+                    # Remove duplicates while preserving order
+                    seen = set()
+                    unique_tags = []
+                    for tag in intent_tags:
+                        if tag not in seen:
+                            seen.add(tag)
+                            unique_tags.append(tag)
+                    metadata += " " + " ".join(unique_tags)
+            
+            combined = f"{tagged_text} {metadata}".strip() if tagged_text else metadata
             texts.append(combined)
         return " ".join(texts)
 

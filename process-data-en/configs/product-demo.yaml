@@ -28,12 +28,12 @@ language: "english"
 
 input:
   # IMPORTANT: Update this path to your product demo audio files
-  directory: "/path/to/your/product_demo_audio"
+  directory: "/external4/datasets/strem2action-audio/product_demo"
   extensions: [".wav", ".mp3", ".mp4", ".webm"]
 
 output:
   # IMPORTANT: Update this path for the processed output
-  directory: "/path/to/your/output_directory"
+  directory: "/external4/datasets/strem2action-audio/product_demo"
   per_file_subdirs: false  # Centralized output
 
 prompts:

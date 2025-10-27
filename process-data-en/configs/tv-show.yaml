@@ -25,16 +25,16 @@ processing:
   min_speakers: 1  # For single-person shows or narration
   max_speakers: 10  # For ensemble casts or panel shows
 
-language: "auto"  # Automatic language detection for multilingual content
+language: "english"  # Automatic language detection for multilingual content
 
 input:
   # IMPORTANT: Update this path to your TV show audio files
-  directory: "/external4/datasets/strem2action-audio/tvshow_english"
+  directory: "/external4/datasets/strem2action-audio/tvshow_data"
   extensions: [".wav", ".mp3", ".mp4", ".mkv", ".webm", ".m4a"]
 
 output:
   # IMPORTANT: Update this path for the processed output
-  directory: "/external4/datasets/strem2action-audio/tvshow_english"
+  directory: "/external4/datasets/strem2action-audio/tvshow_data"
   per_file_subdirs: true  # Separate output per episode/file
 
 prompts:

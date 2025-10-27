@@ -15,8 +15,8 @@ features:
   diarization: true
   entity_intent_extraction: true
   structured_summary: true
-  gemini_transcription: false  # Use Whisper as primary
-  deepgram_transcription: false
+  gemini_transcription: true  # Enable Gemini transcription when API key is present
+  deepgram_transcription: true
 
 processing:
   chunk_duration: 30.0  # seconds

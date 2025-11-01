@@ -30,12 +30,12 @@ language: "english"
 
 input:
   # IMPORTANT: Update this path to your movie audio/video files
-  directory: "/external4/datasets/strem2action-audio/movies_data"
+  directory: "/external4/datasets/strem2action-audio/movies_data_full"
   extensions: [".wav", ".mp3", ".mp4", ".mkv", ".webm", ".m4a"]
 
 output:
   # IMPORTANT: Update this path for the processed output
-  directory: "/external4/datasets/strem2action-audio/movies_data"
+  directory: "/external4/datasets/strem2action-audio/movies_data_full"
   per_file_subdirs: true  # Keep outputs alongside each movie/scene
 
 prompts:
